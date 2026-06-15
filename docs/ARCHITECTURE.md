@@ -24,7 +24,7 @@ apate/
 ├── skills/
 │   └── apate-cli/SKILL.md         面向 agent 的 CLI 使用说明
 ├── docs/                          本目录 —— 项目文档
-└── .github/workflows/release.yml  v* tag → 多平台构建与 Release
+└── .github/workflows/release.yml  main/tag → 多平台构建，v* tag → Release
 ```
 
 ## Crate 依赖图
@@ -173,7 +173,7 @@ apate TUI 模式
 
 ## 发布与 CI
 
-- GitHub Actions: `.github/workflows/release.yml` 在 `v*` tag 推送时构建
+- GitHub Actions: `.github/workflows/release.yml` 在 `main` 与 `v*` tag 推送时构建
   Windows + Linux 产物。
 - Release Notes 自动取 `CHANGELOG.md` 的 `Unreleased` 段。
 - 本地发布前先跑 `cargo test --workspace`。
