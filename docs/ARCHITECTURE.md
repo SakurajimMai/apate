@@ -13,6 +13,7 @@ repo/
 │   │   └── tests/format_roundtrip.rs
 │   └── apate-cli/
 │       ├── src/main.rs
+│       ├── src/gui.rs
 │       └── tests/
 ├── docs/
 ├── skills/apate-cli/
@@ -22,7 +23,7 @@ repo/
 ## Crate 边界
 
 - `apate-core`：负责字节级算法、面具定义、恢复元数据加密、输入文件收集和错误类型。
-- `apate-cli`：负责 `clap` 参数解析、JSON 输出、TUI 菜单、批量处理和重命名策略；无参数运行时直接进入 TUI，方便 Windows 用户双击 exe 使用。
+- `apate-cli`：负责 `clap` 参数解析、JSON 输出、Windows 拖拽 GUI、TUI 菜单、批量处理和重命名策略；Windows 交互环境无参数运行时进入 GUI，`apate tui` 显式进入终端菜单，子命令服务脚本和 agent。
 
 ```mermaid
 graph LR
@@ -65,6 +66,8 @@ graph LR
 - `--dry-run` 复用正式执行的 mask 校验和输出路径检查。
 
 ## CLI 流程
+
+GUI 只负责窗口、菜单和拖拽入口，不保存独立文件格式逻辑。拖入中间区域时调用与 CLI 相同的 `disguise_file`、`disguise_output_path`、`ensure_output_available` 和 `rename_if_needed`；拖入右侧区域时调用与 CLI 相同的 `reveal_file`、`reveal_output_path` 和输出冲突检查。因此 GUI、TUI、CLI 的默认命名和安全行为保持一致。
 
 ```mermaid
 sequenceDiagram

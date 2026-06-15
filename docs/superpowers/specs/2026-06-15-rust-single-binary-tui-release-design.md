@@ -14,11 +14,11 @@
 - `apate reveal --input <path> [--recursive] [--no-rename] [--force] [--json] [--dry-run]`
 - `apate tui`
 
-无参数运行 `apate` 时直接进入 TUI，Windows 用户可以双击 `apate.exe` 使用；脚本和 agent 仍应调用明确子命令并使用 `--json`。
+Windows 交互环境无参数运行 `apate` 时进入拖拽 GUI，Windows 用户可以双击 `apate.exe` 使用；脚本和 agent 仍应调用明确子命令并使用 `--json`。
 
-## TUI
+## GUI 与 TUI
 
-TUI 使用标准输入输出实现，不引入复杂终端依赖。无参数默认进入 TUI，满足普通用户双击 exe 即可使用的需求；自动化场景通过显式子命令区分，不依赖无参数入口。
+GUI 使用 Windows 原生窗口实现三栏拖拽：检查、伪装、还原，满足普通用户双击 exe 即可使用的需求。TUI 使用标准输入输出实现，不引入复杂终端依赖，并通过 `apate tui` 显式进入；自动化场景通过显式子命令区分，不依赖无参数入口。
 
 ## 发布
 

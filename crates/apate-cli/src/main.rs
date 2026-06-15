@@ -9,6 +9,9 @@ use apate_core::{
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 
+#[cfg(windows)]
+mod gui;
+
 fn main() {
     let cli = Cli::parse();
     let result = match cli.command {
@@ -17,13 +20,24 @@ fn main() {
         Some(Command::Disguise(args)) => disguise_command(args),
         Some(Command::Reveal(args)) => reveal_command(args),
         Some(Command::Tui(args)) => tui_command(args),
-        None => run_tui(),
+        None => run_default_interface(),
     };
 
     if let Err(error) = result {
         eprintln!("{error}");
         std::process::exit(1);
     }
+}
+
+fn run_default_interface() -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+            return gui::run_gui().map_err(|error| error.to_string());
+        }
+    }
+
+    run_tui()
 }
 
 #[derive(Debug, Parser)]
@@ -142,7 +156,7 @@ struct ActionOutput {
     message: String,
 }
 
-struct SelectedMask {
+pub(crate) struct SelectedMask {
     bytes: Vec<u8>,
     extension: String,
 }
@@ -357,7 +371,7 @@ fn select_mask_checked(args: &DisguiseArgs) -> apate_core::Result<SelectedMask> 
     Ok(SelectedMask { bytes, extension })
 }
 
-fn rename_if_needed(path: &Path, output_path: Option<&Path>) -> apate_core::Result<()> {
+pub(crate) fn rename_if_needed(path: &Path, output_path: Option<&Path>) -> apate_core::Result<()> {
     if let Some(output_path) = output_path {
         ensure_output_available(Some(output_path))?;
         fs::rename(path, output_path)?;
@@ -365,7 +379,7 @@ fn rename_if_needed(path: &Path, output_path: Option<&Path>) -> apate_core::Resu
     Ok(())
 }
 
-fn ensure_output_available(output_path: Option<&Path>) -> apate_core::Result<()> {
+pub(crate) fn ensure_output_available(output_path: Option<&Path>) -> apate_core::Result<()> {
     if let Some(output_path) = output_path {
         if output_path.exists() {
             return Err(ApateError::OutputExists(output_path.to_path_buf()));
@@ -493,7 +507,7 @@ fn prompt_line(stdin: &io::Stdin, prompt: &str) -> Result<String, String> {
     Ok(input.trim().to_string())
 }
 
-fn builtin_selected_mask(kind: MaskKind) -> SelectedMask {
+pub(crate) fn builtin_selected_mask(kind: MaskKind) -> SelectedMask {
     let mask = builtin_mask(kind);
     SelectedMask {
         bytes: mask.bytes.to_vec(),
@@ -501,7 +515,7 @@ fn builtin_selected_mask(kind: MaskKind) -> SelectedMask {
     }
 }
 
-fn disguise_output_path(path: &Path, extension: &str) -> PathBuf {
+pub(crate) fn disguise_output_path(path: &Path, extension: &str) -> PathBuf {
     let extension = extension.trim_start_matches('.');
     if extension.is_empty() {
         return path.to_path_buf();
@@ -509,7 +523,7 @@ fn disguise_output_path(path: &Path, extension: &str) -> PathBuf {
     path.with_extension(extension)
 }
 
-fn reveal_output_path(path: &Path) -> apate_core::Result<Option<PathBuf>> {
+pub(crate) fn reveal_output_path(path: &Path) -> apate_core::Result<Option<PathBuf>> {
     if let Some(extension) = original_extension(path)? {
         let renamed = if extension.is_empty() {
             path.with_extension("")
@@ -561,7 +575,7 @@ fn print_json(output: &impl Serialize) -> Result<(), String> {
     Ok(())
 }
 
-fn display_path(path: &Path) -> String {
+pub(crate) fn display_path(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 

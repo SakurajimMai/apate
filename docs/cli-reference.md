@@ -9,7 +9,7 @@
 - `disguise` 和 `reveal` 默认会重命名文件；需要只改内容时使用 `--no-rename`。
 - 默认重命名目标已存在时返回 `output_exists`，不会覆盖已有文件。
 - `--dry-run` 不写文件，但会校验 mask 和输出路径。
-- 直接运行 `apate` 会进入交互菜单，适合 Windows 双击 exe 或临时人工操作。
+- Windows 交互终端里直接运行 `apate` 会进入拖拽 GUI；管道输入或非 Windows 环境会回退到 TUI。
 - 默认命名会隐藏原扩展名：`secret.zip` 伪装为 JPG 后得到 `secret.jpg`，还原时再恢复为 `secret.zip`。
 
 ## `apate inspect <PATH> [--json]`
@@ -95,9 +95,19 @@ apate disguise --input .\files --kind mp4 --recursive --dry-run --json
 - 默认会先调用 `inspect_file`，未识别文件返回 `not_disguised`。
 - `--force` 只在明确接受风险时使用。
 
+## `apate` GUI
+
+Windows 普通用户可以直接双击 `apate.exe`，或在交互终端无参数运行 `apate`。GUI 提供三块拖拽区域：
+
+- 左侧：检查文件状态；
+- 中间：按当前菜单选择的格式伪装，默认 MP4；
+- 右侧：还原 Apate 文件。
+
+GUI 复用 CLI 的核心算法、默认命名和输出冲突检查。
+
 ## `apate tui`
 
-标准输入输出菜单，不支持 `--json`。`apate` 无参数运行和 `apate tui` 进入的是同一套菜单。
+标准输入输出菜单，不支持 `--json`。适合临时终端操作；脚本和 agent 不应使用 TUI。
 
 菜单提供：
 
