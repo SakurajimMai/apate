@@ -36,7 +36,7 @@ pub enum ApateError {
     EmptyMask,
     #[error("面具文件过大: {length} 字节，最大允许 {max} 字节")]
     MaskTooLarge { length: u64, max: u64 },
-    #[error("文件不是有效的旧格式伪装文件")]
+    #[error("文件不是有效的 apate 伪装文件")]
     NotDisguised,
     #[error("输出路径已存在: {0}")]
     OutputExists(PathBuf),
@@ -95,7 +95,7 @@ const BUILTIN_MASKS: &[BuiltinMask] = &[
     },
 ];
 
-const ONE_KEY_MASK: &[u8] = include_bytes!("../../../apate/Resources/mask.mp4");
+const ONE_KEY_MASK: &[u8] = include_bytes!("../resources/mask.mp4");
 
 pub fn builtin_masks() -> &'static [BuiltinMask] {
     BUILTIN_MASKS

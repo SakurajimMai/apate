@@ -79,7 +79,7 @@ fn reveal_restores_file_when_mask_is_longer_than_original_file() {
 }
 
 #[test]
-fn inspect_rejects_plain_file_and_accepts_legacy_disguised_file() {
+fn inspect_rejects_plain_file_and_accepts_apate_disguised_file() {
     let dir = TestDir::new();
     let file = dir.path().join("plain.bin");
     fs::write(&file, b"plain").unwrap();
@@ -113,7 +113,7 @@ fn default_reveal_rejects_plain_file_with_plausible_length_trailer() {
 }
 
 #[test]
-fn force_reveal_keeps_custom_mask_legacy_compatibility() {
+fn force_reveal_restores_custom_mask_file() {
     let dir = TestDir::new();
     let file = dir.path().join("custom-mask.bin");
     let original = b"abcdef0123456789";
@@ -126,7 +126,7 @@ fn force_reveal_keeps_custom_mask_legacy_compatibility() {
 }
 
 #[test]
-fn builtin_masks_match_legacy_simple_headers() {
+fn builtin_masks_match_simple_headers() {
     assert_eq!(builtin_mask(MaskKind::Jpg).bytes, &[0xff, 0xd8, 0xff, 0xe1]);
     assert_eq!(builtin_mask(MaskKind::Mov).bytes, b"moov");
     assert_eq!(&builtin_mask(MaskKind::Mp4).bytes[..8], b"\0\0\0 ftyp");

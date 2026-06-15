@@ -92,7 +92,7 @@ fn tui_can_inspect_a_file_from_stdin_menu() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("未识别为旧格式伪装文件"));
+    assert!(stdout.contains("未识别为 apate 伪装文件"));
 }
 
 #[test]

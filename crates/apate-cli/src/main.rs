@@ -165,9 +165,9 @@ fn inspect_command(args: InspectArgs) -> Result<(), String> {
             "{}: {}",
             output.path,
             if output.disguised {
-                "旧格式伪装文件"
+                "apate 伪装文件"
             } else {
-                "未识别为旧格式伪装文件"
+                "未识别为 apate 伪装文件"
             }
         );
         Ok(())
@@ -322,42 +322,6 @@ fn tui_command(args: TuiArgs) -> Result<(), String> {
     run_tui()
 }
 
-#[allow(dead_code)]
-fn select_mask(args: &DisguiseArgs) -> Result<SelectedMask, String> {
-    let selected_count =
-        args.one_key as usize + args.kind.is_some() as usize + args.mask_file.is_some() as usize;
-    if selected_count != 1 {
-        return Err("必须且只能选择一种面具来源: --one-key、--kind 或 --mask-file".to_string());
-    }
-
-    if args.one_key {
-        let mask = builtin_mask(MaskKind::Mp4);
-        return Ok(SelectedMask {
-            bytes: include_bytes!("../../../apate/Resources/mask.mp4").to_vec(),
-            extension: mask.extension.to_string(),
-        });
-    }
-
-    if let Some(kind) = args.kind {
-        let mask = builtin_mask(kind.into());
-        return Ok(SelectedMask {
-            bytes: mask.bytes.to_vec(),
-            extension: mask.extension.to_string(),
-        });
-    }
-
-    let mask_file = args
-        .mask_file
-        .as_ref()
-        .expect("mask_file 已在数量检查中确认");
-    let bytes = fs::read(mask_file).map_err(|error| error.to_string())?;
-    let extension = mask_file
-        .extension()
-        .map(|extension| format!(".{}", extension.to_string_lossy()))
-        .unwrap_or_default();
-    Ok(SelectedMask { bytes, extension })
-}
-
 fn select_mask_checked(args: &DisguiseArgs) -> apate_core::Result<SelectedMask> {
     let selected_count =
         args.one_key as usize + args.kind.is_some() as usize + args.mask_file.is_some() as usize;
@@ -477,9 +441,9 @@ fn run_tui_inspect(stdin: &io::Stdin) -> Result<(), String> {
     println!(
         "{}",
         if inspection.disguised {
-            "旧格式伪装文件"
+            "apate 伪装文件"
         } else {
-            "未识别为旧格式伪装文件"
+            "未识别为 apate 伪装文件"
         }
     );
     Ok(())
@@ -490,7 +454,7 @@ fn run_tui_disguise(stdin: &io::Stdin) -> Result<(), String> {
     let kind = prompt_line(stdin, "输入面具类型(exe/jpg/mp4/mov/onekey): ")?;
     let selected_mask = match kind.as_str() {
         "onekey" => SelectedMask {
-            bytes: include_bytes!("../../../apate/Resources/mask.mp4").to_vec(),
+            bytes: one_key_mask().to_vec(),
             extension: ".mp4".to_string(),
         },
         "exe" => builtin_selected_mask(MaskKind::Exe),

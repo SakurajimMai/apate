@@ -1,13 +1,13 @@
 ---
 name: apate-cli
-description: Use when an agent needs to inspect, disguise, reveal, batch process, or safely automate files with the Rust apate CLI, especially when JSON output, dry-run checks, old-format compatibility, or reveal safety matters.
+description: Use when an agent needs to inspect, disguise, reveal, batch process, or safely automate files with the Rust apate CLI.
 ---
 
 # Apate CLI
 
 ## 核心原则
 
-先检查，再写入；批量写入前先 dry-run；自动化场景优先解析 `--json`，不要解析人类可读文本。
+先检查，再写入；批量写入前先 dry-run；自动化场景优先解析 `--json`。
 
 ## 常用命令
 
@@ -36,10 +36,6 @@ description: Use when an agent needs to inspect, disguise, reveal, batch process
 - `disguise` 默认追加面具扩展名，例如 `a.zip` 变成 `a.zip.jpg`。
 - `reveal` 默认移除最后一个扩展名，例如 `a.zip.jpg` 变回 `a.zip`。
 - 需要只改内容不改文件名时加 `--no-rename`。
-
-## 旧格式兼容
-
-Rust CLI 默认写入旧版 apate 格式：覆盖文件头，尾部追加倒序原文件头，再追加 4 字节 little-endian 面具长度。不要自行拼接或改写这个格式；需要文件操作时调用 CLI 或 `apate-core`。
 
 ## 常见错误
 
