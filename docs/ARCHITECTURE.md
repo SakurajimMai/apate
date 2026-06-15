@@ -22,7 +22,7 @@ repo/
 ## Crate 边界
 
 - `apate-core`：只依赖 `std` 和 `thiserror`，负责字节级算法、面具定义、输入文件收集和错误类型。
-- `apate-cli`：负责 `clap` 参数解析、JSON 输出、TUI 菜单、批量处理和重命名策略。
+- `apate-cli`：负责 `clap` 参数解析、JSON 输出、TUI 菜单、批量处理和重命名策略；无参数运行时直接进入 TUI，方便 Windows 用户双击 exe 使用。
 
 ```mermaid
 graph LR
@@ -105,6 +105,7 @@ sequenceDiagram
 - 在 `main` push 时更新 `latest` 预发布 Release，并把构建附件放到 Releases 页面。
 - 在 `v*` tag push 时创建正式 GitHub Release。
 - 使用 `CHANGELOG.md` 的 `Unreleased` 段作为 Release Notes。
+- 发布压缩包只包含对应平台的可执行文件，不把 `CHANGELOG.md` 打进附件目录。
 
 本地发布前至少运行：
 

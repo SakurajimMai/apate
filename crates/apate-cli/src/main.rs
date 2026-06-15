@@ -17,10 +17,7 @@ fn main() {
         Some(Command::Disguise(args)) => disguise_command(args),
         Some(Command::Reveal(args)) => reveal_command(args),
         Some(Command::Tui(args)) => tui_command(args),
-        None => {
-            print_top_level_help();
-            Ok(())
-        }
+        None => run_tui(),
     };
 
     if let Err(error) = result {
@@ -377,12 +374,6 @@ fn ensure_output_available(output_path: Option<&Path>) -> apate_core::Result<()>
     Ok(())
 }
 
-fn print_top_level_help() {
-    println!("apate TUI 模式已提供。");
-    println!("运行 `apate tui` 进入交互菜单。");
-    println!("运行 `apate <subcommand>` 使用直接命令模式。");
-}
-
 fn run_tui() -> Result<(), String> {
     let stdin = io::stdin();
     let mut input = String::new();
@@ -402,20 +393,24 @@ fn run_tui() -> Result<(), String> {
             .map_err(|error| error.to_string())?;
         match input.trim() {
             "1" => {
-                run_tui_inspect(&stdin)?;
-                return Ok(());
+                if let Err(error) = run_tui_inspect(&stdin) {
+                    println!("错误: {error}");
+                }
             }
             "2" => {
-                run_tui_masks()?;
-                return Ok(());
+                if let Err(error) = run_tui_masks() {
+                    println!("错误: {error}");
+                }
             }
             "3" => {
-                run_tui_disguise(&stdin)?;
-                return Ok(());
+                if let Err(error) = run_tui_disguise(&stdin) {
+                    println!("错误: {error}");
+                }
             }
             "4" => {
-                run_tui_reveal(&stdin)?;
-                return Ok(());
+                if let Err(error) = run_tui_reveal(&stdin) {
+                    println!("错误: {error}");
+                }
             }
             "0" | "q" | "quit" | "exit" => return Ok(()),
             _ => println!("无效选择"),

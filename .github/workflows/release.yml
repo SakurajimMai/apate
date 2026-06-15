@@ -45,7 +45,6 @@ jobs:
           $dist = "dist"
           New-Item -ItemType Directory -Force $dist | Out-Null
           Copy-Item "target\${{ matrix.target }}\release\apate.exe" "$dist\apate.exe"
-          Copy-Item "CHANGELOG.md" "$dist\CHANGELOG.md"
           Compress-Archive -Path "$dist\*" -DestinationPath "${{ matrix.archive }}" -Force
 
       - name: Package Linux
@@ -55,7 +54,6 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           cp target/${{ matrix.target }}/release/apate dist/apate
-          cp CHANGELOG.md dist/CHANGELOG.md
           tar -czf "${{ matrix.archive }}" -C dist .
 
       - name: Upload artifact

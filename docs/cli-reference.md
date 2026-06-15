@@ -9,6 +9,7 @@
 - `disguise` 和 `reveal` 默认会重命名文件；需要只改内容时使用 `--no-rename`。
 - 默认重命名目标已存在时返回 `output_exists`，不会覆盖已有文件。
 - `--dry-run` 不写文件，但会校验 mask 和输出路径。
+- 直接运行 `apate` 会进入交互菜单，适合 Windows 双击 exe 或临时人工操作。
 
 ## `apate inspect <PATH> [--json]`
 
@@ -94,7 +95,9 @@ apate disguise --input .\files --kind mp4 --recursive --dry-run --json
 
 ## `apate tui`
 
-标准输入输出菜单，不支持 `--json`。菜单提供：
+标准输入输出菜单，不支持 `--json`。`apate` 无参数运行和 `apate tui` 进入的是同一套菜单。
+
+菜单提供：
 
 1. `inspect`
 2. `masks`

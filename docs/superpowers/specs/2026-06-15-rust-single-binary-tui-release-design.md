@@ -14,9 +14,11 @@
 - `apate reveal --input <path> [--recursive] [--no-rename] [--force] [--json] [--dry-run]`
 - `apate tui`
 
+无参数运行 `apate` 时直接进入 TUI，Windows 用户可以双击 `apate.exe` 使用；脚本和 agent 仍应调用明确子命令并使用 `--json`。
+
 ## TUI
 
-TUI 使用标准输入输出实现，不引入复杂终端依赖。默认无子命令时显示入口提示，不自动进入 TUI，避免 agent 调用时阻塞。
+TUI 使用标准输入输出实现，不引入复杂终端依赖。无参数默认进入 TUI，满足普通用户双击 exe 即可使用的需求；自动化场景通过显式子命令区分，不依赖无参数入口。
 
 ## 发布
 
@@ -25,7 +27,7 @@ GitHub Actions 在 `main` push 和 `v*` tag push 时构建：
 - Windows: `apate-<ref>-windows-x86_64.zip`
 - Linux: `apate-<ref>-linux-x86_64.tar.gz`
 
-`main` push 会更新 `latest` 预发布 Release；`v*` tag 会创建正式 GitHub Release。Release Notes 从 `CHANGELOG.md` 的 `Unreleased` 段抽取。
+`main` push 会更新 `latest` 预发布 Release；`v*` tag 会创建正式 GitHub Release。Release Notes 从 `CHANGELOG.md` 的 `Unreleased` 段抽取，但压缩包只包含平台可执行文件。
 
 ## 安全策略
 

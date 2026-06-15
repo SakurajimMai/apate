@@ -14,4 +14,6 @@ fn release_workflow_builds_on_main_push_and_tags() {
     assert!(workflow.contains("prerelease: true"));
     assert!(workflow.contains("overwrite_files: true"));
     assert!(workflow.contains("tag_name: ${{ github.ref_name }}"));
+    assert!(!workflow.contains("Copy-Item \"CHANGELOG.md\""));
+    assert!(!workflow.contains("cp CHANGELOG.md dist/CHANGELOG.md"));
 }
