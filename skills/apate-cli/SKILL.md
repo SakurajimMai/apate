@@ -9,6 +9,8 @@ description: Use when an agent needs to inspect, disguise, reveal, batch process
 
 先检查，再写入；批量写入前先 dry-run；自动化场景优先解析 `--json`。
 
+Apate 用于文件格式伪装和混淆，常见目标是对抗百度网盘等网盘按扩展名、文件头或格式识别做的限制。它不是密码学加密；涉及隐私或敏感内容时，应先用 zip/7z 等工具加密打包，再用 Apate 伪装外观。
+
 `apate` 是一个单二进制多模式程序：
 
 - 直接运行 `apate` 或双击 Windows `apate.exe`：进入交互菜单，面向普通用户。
@@ -40,8 +42,9 @@ description: Use when an agent needs to inspect, disguise, reveal, batch process
 
 ## 命名行为
 
-- `disguise` 默认追加面具扩展名，例如 `a.zip` 变成 `a.zip.jpg`。
-- `reveal` 默认移除最后一个扩展名，例如 `a.zip.jpg` 变回 `a.zip`。
+- `disguise` 默认替换最后一个扩展名，例如 `a.zip` 变成 `a.jpg`，`a.zip` 一键伪装变成 `a.mp4`。
+- `reveal` 默认优先恢复伪装时记录的原扩展名，例如 `a.jpg` 变回 `a.zip`。
+- 缺少原扩展名元数据的文件会退回到移除最后一个扩展名。
 - 需要只改内容不改文件名时加 `--no-rename`。
 
 ## 常见错误

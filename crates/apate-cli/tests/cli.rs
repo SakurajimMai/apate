@@ -78,6 +78,7 @@ fn masks_json_lists_builtin_masks_for_agents() {
 fn dry_run_disguise_reports_actions_without_modifying_file() {
     let dir = TestDir::new();
     let file = dir.path().join("payload.bin");
+    let target = dir.path().join("payload.jpg");
     let original = b"abcdef";
     fs::write(&file, original).unwrap();
 
@@ -95,7 +96,9 @@ fn dry_run_disguise_reports_actions_without_modifying_file() {
 
     assert_eq!(json["dry_run"], true);
     assert_eq!(json["results"][0]["action"], "disguise");
+    assert_eq!(json["results"][0]["output_path"], display_path(&target));
     assert_eq!(fs::read(&file).unwrap(), original);
+    assert!(!target.exists());
 }
 
 #[test]
@@ -129,7 +132,7 @@ fn dry_run_disguise_validates_custom_mask_file() {
 fn disguise_refuses_to_overwrite_default_rename_target_before_writing_source() {
     let dir = TestDir::new();
     let file = dir.path().join("payload.bin");
-    let target = dir.path().join("payload.bin.jpg");
+    let target = dir.path().join("payload.jpg");
     let original = b"abcdef";
     let existing = b"existing target";
     fs::write(&file, original).unwrap();
@@ -156,24 +159,26 @@ fn disguise_refuses_to_overwrite_default_rename_target_before_writing_source() {
 #[test]
 fn reveal_refuses_to_overwrite_default_rename_target_before_writing_source() {
     let dir = TestDir::new();
-    let file = dir.path().join("payload.bin.jpg");
+    let source = dir.path().join("payload.bin");
+    let file = dir.path().join("payload.jpg");
     let target = dir.path().join("payload.bin");
     let original = b"abcdef0123456789";
     let existing = b"existing target";
-    fs::write(&file, original).unwrap();
+    fs::write(&source, original).unwrap();
 
     let mut disguise = apate();
     disguise.args([
         "disguise",
         "--input",
-        file.to_str().unwrap(),
+        source.to_str().unwrap(),
         "--kind",
         "jpg",
-        "--no-rename",
         "--json",
     ]);
     let disguised = output_json(disguise);
     assert_eq!(disguised["ok"], true);
+    assert!(!source.exists());
+    assert!(file.exists());
     let disguised_source = fs::read(&file).unwrap();
 
     fs::write(&target, existing).unwrap();
@@ -187,6 +192,74 @@ fn reveal_refuses_to_overwrite_default_rename_target_before_writing_source() {
     assert_eq!(json["results"][0]["output_path"], display_path(&target));
     assert_eq!(fs::read(&file).unwrap(), disguised_source);
     assert_eq!(fs::read(&target).unwrap(), existing);
+}
+
+#[test]
+fn disguise_replaces_extension_and_reveal_restores_original_name() {
+    let dir = TestDir::new();
+    let source = dir.path().join("secret.zip");
+    let disguised_path = dir.path().join("secret.jpg");
+    let original = b"abcdef0123456789";
+    fs::write(&source, original).unwrap();
+
+    let mut disguise = apate();
+    disguise.args([
+        "disguise",
+        "--input",
+        source.to_str().unwrap(),
+        "--kind",
+        "jpg",
+        "--json",
+    ]);
+    let disguised = output_json(disguise);
+
+    assert_eq!(disguised["ok"], true);
+    assert_eq!(
+        disguised["results"][0]["output_path"],
+        display_path(&disguised_path)
+    );
+    assert!(!source.exists());
+    assert!(disguised_path.exists());
+
+    let mut reveal = apate();
+    reveal.args([
+        "reveal",
+        "--input",
+        disguised_path.to_str().unwrap(),
+        "--json",
+    ]);
+    let revealed = output_json(reveal);
+
+    assert_eq!(revealed["ok"], true);
+    assert_eq!(revealed["results"][0]["output_path"], display_path(&source));
+    assert!(source.exists());
+    assert!(!disguised_path.exists());
+    assert_eq!(fs::read(&source).unwrap(), original);
+}
+
+#[test]
+fn one_key_disguise_replaces_extension_with_mp4() {
+    let dir = TestDir::new();
+    let source = dir.path().join("secret.zip");
+    let disguised_path = dir.path().join("secret.mp4");
+    fs::write(&source, b"abcdef0123456789").unwrap();
+
+    let mut disguise = apate();
+    disguise.args([
+        "disguise",
+        "--input",
+        source.to_str().unwrap(),
+        "--one-key",
+        "--dry-run",
+        "--json",
+    ]);
+    let disguised = output_json(disguise);
+
+    assert_eq!(disguised["dry_run"], true);
+    assert_eq!(
+        disguised["results"][0]["output_path"],
+        display_path(&disguised_path)
+    );
 }
 
 #[test]

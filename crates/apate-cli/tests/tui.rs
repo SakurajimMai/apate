@@ -155,6 +155,42 @@ fn tui_returns_to_menu_after_action_until_user_exits() {
 }
 
 #[test]
+fn tui_disguise_renames_like_cli() {
+    let dir = TestDir::new();
+    let source = dir.path().join("secret.zip");
+    let disguised = dir.path().join("secret.jpg");
+    fs::write(&source, b"plain payload").unwrap();
+
+    let mut child = apate()
+        .arg("tui")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    {
+        use std::io::Write;
+        let stdin = child.stdin.as_mut().unwrap();
+        writeln!(stdin, "3").unwrap();
+        writeln!(stdin, "{}", source.display()).unwrap();
+        writeln!(stdin, "jpg").unwrap();
+        writeln!(stdin, "0").unwrap();
+    }
+
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("伪装完成"));
+    assert!(!source.exists());
+    assert!(disguised.exists());
+}
+
+#[test]
 fn tui_can_exit_cleanly() {
     let mut child = apate()
         .arg("tui")

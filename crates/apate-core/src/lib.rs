@@ -5,6 +5,10 @@ use std::path::{Path, PathBuf};
 pub const MASK_LENGTH_INDICATOR_LENGTH: u64 = 4;
 pub const MAXIMUM_MASK_LENGTH: u64 = 2_147_483_647 / 7;
 
+const EXTENSION_FOOTER_MAGIC: &[u8; 8] = b"APATE2EX";
+const EXTENSION_LENGTH_FIELD_LENGTH: u64 = 2;
+const EXTENSION_FOOTER_MAGIC_LENGTH: u64 = EXTENSION_FOOTER_MAGIC.len() as u64;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MaskKind {
     Exe,
@@ -116,6 +120,16 @@ pub fn disguise_file(path: impl AsRef<Path>, mask: &[u8]) -> Result<()> {
     validate_mask(mask)?;
 
     let path = path.as_ref();
+    let original_extension = path
+        .extension()
+        .map(|extension| extension.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    validate_extension_text(&original_extension)?;
+    let original_extension = original_extension.as_bytes();
+    if original_extension.len() > u16::MAX as usize {
+        return Err(ApateError::InvalidArguments("文件扩展名过长".to_string()));
+    }
+
     let mut file = OpenOptions::new().read(true).write(true).open(path)?;
     let file_length = file.metadata()?.len();
     let original_head_length = file_length.min(mask.len() as u64) as usize;
@@ -127,6 +141,9 @@ pub fn disguise_file(path: impl AsRef<Path>, mask: &[u8]) -> Result<()> {
     file.seek(SeekFrom::End(0))?;
     original_head.reverse();
     file.write_all(&original_head)?;
+    file.write_all(original_extension)?;
+    file.write_all(&(original_extension.len() as u16).to_le_bytes())?;
+    file.write_all(EXTENSION_FOOTER_MAGIC)?;
     file.write_all(&(mask.len() as i32).to_le_bytes())?;
     file.flush()?;
 
@@ -143,15 +160,20 @@ pub fn reveal_file(path: impl AsRef<Path>, force: bool) -> Result<()> {
     let mut file = OpenOptions::new().read(true).write(true).open(path)?;
     let disguised_length = file.metadata()?.len();
     let mask_head_length = read_mask_length(&mut file, disguised_length)?;
+    let extension_footer = read_extension_footer(&mut file, disguised_length, mask_head_length)?;
     let payload_length = disguised_length
         .checked_sub(MASK_LENGTH_INDICATOR_LENGTH)
+        .and_then(|length| length.checked_sub(extension_footer.byte_length))
         .and_then(|length| length.checked_sub(mask_head_length as u64))
         .ok_or(ApateError::NotDisguised)?;
 
     let original_head_length;
     if mask_head_length as u64 <= payload_length {
         file.seek(SeekFrom::Start(
-            disguised_length - MASK_LENGTH_INDICATOR_LENGTH - mask_head_length as u64,
+            disguised_length
+                - MASK_LENGTH_INDICATOR_LENGTH
+                - extension_footer.byte_length
+                - mask_head_length as u64,
         ))?;
         original_head_length = mask_head_length as usize;
     } else {
@@ -161,7 +183,12 @@ pub fn reveal_file(path: impl AsRef<Path>, force: bool) -> Result<()> {
 
     let mut original_head = vec![0_u8; original_head_length];
     file.read_exact(&mut original_head)?;
-    file.set_len(disguised_length - mask_head_length as u64 - MASK_LENGTH_INDICATOR_LENGTH)?;
+    file.set_len(
+        disguised_length
+            - mask_head_length as u64
+            - extension_footer.byte_length
+            - MASK_LENGTH_INDICATOR_LENGTH,
+    )?;
     file.seek(SeekFrom::Start(0))?;
     original_head.reverse();
     file.write_all(&original_head)?;
@@ -193,6 +220,7 @@ pub fn inspect_file(path: impl AsRef<Path>) -> Result<Inspection> {
         }
         Err(error) => return Err(error),
     };
+    let extension_footer = read_extension_footer(&mut file, file_length, mask_length)?;
 
     if !has_known_mask_header(&mut file, mask_length)? {
         return Ok(Inspection {
@@ -202,12 +230,25 @@ pub fn inspect_file(path: impl AsRef<Path>) -> Result<Inspection> {
         });
     }
 
-    let payload_length = file_length - MASK_LENGTH_INDICATOR_LENGTH - mask_length as u64;
+    let payload_length = file_length
+        .checked_sub(MASK_LENGTH_INDICATOR_LENGTH)
+        .and_then(|length| length.checked_sub(extension_footer.byte_length))
+        .and_then(|length| length.checked_sub(mask_length as u64))
+        .ok_or(ApateError::NotDisguised)?;
     Ok(Inspection {
         disguised: true,
         mask_length: Some(mask_length),
         payload_length: Some(payload_length),
     })
+}
+
+pub fn original_extension(path: impl AsRef<Path>) -> Result<Option<String>> {
+    let path = path.as_ref();
+    let mut file = OpenOptions::new().read(true).open(path)?;
+    let file_length = file.metadata()?.len();
+    let mask_length = read_mask_length(&mut file, file_length)?;
+    let extension_footer = read_extension_footer(&mut file, file_length, mask_length)?;
+    Ok(extension_footer.original_extension)
 }
 
 pub fn collect_input_files(path: impl AsRef<Path>, recursive: bool) -> Result<Vec<PathBuf>> {
@@ -283,6 +324,98 @@ fn read_mask_length(file: &mut fs::File, file_length: u64) -> Result<u32> {
         return Err(ApateError::NotDisguised);
     }
     Ok(mask_length)
+}
+
+struct ExtensionFooter {
+    original_extension: Option<String>,
+    byte_length: u64,
+}
+
+fn read_extension_footer(
+    file: &mut fs::File,
+    file_length: u64,
+    mask_length: u32,
+) -> Result<ExtensionFooter> {
+    let minimum_v2_length = MASK_LENGTH_INDICATOR_LENGTH
+        + EXTENSION_FOOTER_MAGIC_LENGTH
+        + EXTENSION_LENGTH_FIELD_LENGTH;
+    if file_length < minimum_v2_length {
+        return Ok(ExtensionFooter {
+            original_extension: None,
+            byte_length: 0,
+        });
+    }
+
+    let magic_start = file_length - MASK_LENGTH_INDICATOR_LENGTH - EXTENSION_FOOTER_MAGIC_LENGTH;
+    file.seek(SeekFrom::Start(magic_start))?;
+    let mut magic = [0_u8; EXTENSION_FOOTER_MAGIC.len()];
+    file.read_exact(&mut magic)?;
+    if &magic != EXTENSION_FOOTER_MAGIC {
+        return Ok(ExtensionFooter {
+            original_extension: None,
+            byte_length: 0,
+        });
+    }
+
+    let Some(length_start) = magic_start.checked_sub(EXTENSION_LENGTH_FIELD_LENGTH) else {
+        return Ok(ExtensionFooter {
+            original_extension: None,
+            byte_length: 0,
+        });
+    };
+    file.seek(SeekFrom::Start(length_start))?;
+    let mut length_bytes = [0_u8; 2];
+    file.read_exact(&mut length_bytes)?;
+    let extension_length = u16::from_le_bytes(length_bytes) as u64;
+    let footer_length =
+        extension_length + EXTENSION_LENGTH_FIELD_LENGTH + EXTENSION_FOOTER_MAGIC_LENGTH;
+
+    if file_length < MASK_LENGTH_INDICATOR_LENGTH + footer_length + mask_length as u64 {
+        return Ok(ExtensionFooter {
+            original_extension: None,
+            byte_length: 0,
+        });
+    }
+
+    let Some(extension_start) = length_start.checked_sub(extension_length) else {
+        return Ok(ExtensionFooter {
+            original_extension: None,
+            byte_length: 0,
+        });
+    };
+    file.seek(SeekFrom::Start(extension_start))?;
+    let mut extension = vec![0_u8; extension_length as usize];
+    file.read_exact(&mut extension)?;
+    let Ok(extension) = String::from_utf8(extension) else {
+        return Ok(ExtensionFooter {
+            original_extension: None,
+            byte_length: 0,
+        });
+    };
+    if validate_extension_text(&extension).is_err() {
+        return Ok(ExtensionFooter {
+            original_extension: None,
+            byte_length: 0,
+        });
+    }
+
+    Ok(ExtensionFooter {
+        original_extension: Some(extension),
+        byte_length: footer_length,
+    })
+}
+
+fn validate_extension_text(extension: &str) -> Result<()> {
+    let valid = extension
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'));
+    if valid {
+        Ok(())
+    } else {
+        Err(ApateError::InvalidArguments(
+            "文件扩展名只能包含 ASCII 字母、数字、- 或 _".to_string(),
+        ))
+    }
 }
 
 fn collect_directory_files(path: &Path, files: &mut Vec<PathBuf>) -> Result<()> {

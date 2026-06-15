@@ -1,6 +1,6 @@
 # Apate 架构说明
 
-Apate 当前实现是一个 Rust workspace，用于提供文件格式伪装、还原、批量处理和自动化友好的 JSON 输出。
+Apate 当前实现是一个 Rust workspace，用于提供文件格式伪装、还原、批量处理和自动化友好的 JSON 输出。它用于把文件外观伪装成图片、视频或可执行文件，以对抗网盘按扩展名或文件头做的限制；它不是密码学加密层。
 
 ## 顶层结构
 
@@ -44,16 +44,17 @@ graph LR
 +---------+----------------------+--------------------------+
 | 头部    | 原文件剩余 payload   | 尾部附加                 |
 +---------+----------------------+--------------------------+
-| mask    | 原文件未覆盖字节     | rev(original_head) + len |
+| mask    | 原文件未覆盖字节     | rev(head) + ext + magic  |
 +---------+----------------------+--------------------------+
 ```
 
 - `mask`：写入文件头部，长度为面具字节数。
 - `original_head`：原文件前 `min(file_len, mask.len())` 字节。
 - `rev(original_head)`：倒序保存到尾部，用于还原。
-- `len`：4 字节 little-endian i32，记录面具长度。
+- `ext`：新格式会保存原扩展名，用于把 `secret.jpg` 还原为 `secret.zip`。
+- `magic`：扩展名元数据标记；最后仍保留 4 字节 little-endian i32 面具长度。
 
-`reveal_file` 根据尾部长度字段定位倒序保存的原文件头，截断尾部元数据，并把原文件头写回。
+`reveal_file` 根据尾部长度字段和扩展名元数据定位倒序保存的原文件头，截断尾部元数据，并把原文件头写回。缺少扩展名元数据的已伪装文件仍可按旧布局还原字节。
 
 ## 安全检查链
 
@@ -75,9 +76,9 @@ sequenceDiagram
     U->>CLI: disguise --input a.zip --kind jpg --json
     CLI->>CORE: builtin_mask(Jpg)
     CLI->>FS: collect_input_files
-    CLI->>CLI: ensure_output_available(a.zip.jpg)
+    CLI->>CLI: ensure_output_available(a.jpg)
     CLI->>CORE: disguise_file(a.zip, mask)
-    CLI->>FS: rename a.zip -> a.zip.jpg
+    CLI->>FS: rename a.zip -> a.jpg
     CLI-->>U: BatchOutput JSON
 ```
 
@@ -88,12 +89,12 @@ sequenceDiagram
     participant CORE as apate-core
     participant FS as Filesystem
 
-    U->>CLI: reveal --input a.zip.jpg --json
+    U->>CLI: reveal --input a.jpg --json
     CLI->>CLI: ensure_output_available(a.zip)
-    CLI->>CORE: reveal_file(a.zip.jpg, force=false)
+    CLI->>CORE: reveal_file(a.jpg, force=false)
     CORE->>CORE: inspect_file
     CORE->>FS: restore bytes
-    CLI->>FS: rename a.zip.jpg -> a.zip
+    CLI->>FS: rename a.jpg -> a.zip
     CLI-->>U: BatchOutput JSON
 ```
 

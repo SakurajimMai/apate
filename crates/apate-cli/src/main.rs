@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use apate_core::{
     ApateError, MaskKind, builtin_mask, builtin_masks, collect_input_files, disguise_file,
-    inspect_file, one_key_mask, reveal_file, validate_mask,
+    inspect_file, one_key_mask, original_extension, reveal_file, validate_mask,
 };
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
@@ -209,11 +209,7 @@ fn disguise_command(args: DisguiseArgs) -> Result<(), String> {
         let output_path = if args.no_rename {
             None
         } else {
-            Some(PathBuf::from(format!(
-                "{}{}",
-                path.to_string_lossy(),
-                selected_mask.extension
-            )))
+            Some(disguise_output_path(&path, &selected_mask.extension))
         };
 
         if let Err(error) = ensure_output_available(output_path.as_deref()) {
@@ -266,9 +262,13 @@ fn reveal_command(args: RevealArgs) -> Result<(), String> {
         let output_path = if args.no_rename {
             None
         } else {
-            path.file_stem()
-                .map(|stem| path.with_file_name(stem))
-                .filter(|renamed| renamed != &path)
+            match reveal_output_path(&path) {
+                Ok(output_path) => output_path,
+                Err(error) => {
+                    results.push(ActionOutput::failure("reveal", &path, None, error));
+                    continue;
+                }
+            }
         };
 
         if let Err(error) = ensure_output_available(output_path.as_deref()) {
@@ -458,14 +458,22 @@ fn run_tui_disguise(stdin: &io::Stdin) -> Result<(), String> {
         "mov" => builtin_selected_mask(MaskKind::Mov),
         _ => return Err("未知面具类型".to_string()),
     };
+    let output_path = disguise_output_path(&path, &selected_mask.extension);
+    ensure_output_available(Some(&output_path)).map_err(|error| error.to_string())?;
     disguise_file(&path, &selected_mask.bytes).map_err(|error| error.to_string())?;
+    rename_if_needed(&path, Some(&output_path)).map_err(|error| error.to_string())?;
     println!("伪装完成");
     Ok(())
 }
 
 fn run_tui_reveal(stdin: &io::Stdin) -> Result<(), String> {
     let path = prompt_path(stdin, "输入要还原的文件路径: ")?;
+    let output_path = reveal_output_path(&path).map_err(|error| error.to_string())?;
+    if let Some(output_path) = output_path.as_deref() {
+        ensure_output_available(Some(output_path)).map_err(|error| error.to_string())?;
+    }
     reveal_file(&path, false).map_err(|error| error.to_string())?;
+    rename_if_needed(&path, output_path.as_deref()).map_err(|error| error.to_string())?;
     println!("还原完成");
     Ok(())
 }
@@ -490,6 +498,34 @@ fn builtin_selected_mask(kind: MaskKind) -> SelectedMask {
     SelectedMask {
         bytes: mask.bytes.to_vec(),
         extension: mask.extension.to_string(),
+    }
+}
+
+fn disguise_output_path(path: &Path, extension: &str) -> PathBuf {
+    let extension = extension.trim_start_matches('.');
+    if extension.is_empty() {
+        return path.to_path_buf();
+    }
+    path.with_extension(extension)
+}
+
+fn reveal_output_path(path: &Path) -> apate_core::Result<Option<PathBuf>> {
+    if let Some(extension) = original_extension(path)? {
+        let renamed = if extension.is_empty() {
+            path.with_extension("")
+        } else {
+            path.with_extension(extension)
+        };
+        if renamed == path {
+            Ok(None)
+        } else {
+            Ok(Some(renamed))
+        }
+    } else {
+        Ok(path
+            .file_stem()
+            .map(|stem| path.with_file_name(stem))
+            .filter(|renamed| renamed != path))
     }
 }
 

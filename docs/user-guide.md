@@ -1,69 +1,296 @@
-# Apate 使用指南
+# Apate 使用教程
 
-## 基本流程
+本教程面向需要使用 apate 处理文件的人员。所有命令都基于 Rust 版的 `apate` CLI。
 
-1. 先用 `inspect` 检查目标文件。
-2. 批量处理前先用 `--dry-run --json` 预检。
-3. 确认输出路径不会冲突后再执行真实写入。
+## 1. 它能做什么
 
-## 查看内置面具
+Apate 通过改写文件头和尾部元数据，把任意文件的字节级外观变成另一种格式
+（mp4 / jpg / exe / mov / 自定义 mask），用于对抗百度网盘等网盘按文件扩展名、
+文件头或格式识别做的上传 / 分享封锁；并能在需要时 **1:1 还原** 回原始字节。
+
+Apate 做的是格式伪装和混淆，不是密码学加密。需要保护内容隐私时，建议先用
+zip / 7z 等工具加密打包，再用 Apate 伪装成 jpg / mp4。
+
+典型场景：
+
+- 上传到只允许图片 / 视频的网盘，但原始是 zip / 7z 等压缩包；
+- 通过按扩展名过滤的传输通道；
+- 把可执行文件伪装成无害格式以避免被误报拦截；
+- 备份 / 归档时把不同格式统一伪装成同一种外观。
+
+## 2. 安装与首次运行
 
 ```powershell
+# 从源码构建
+cargo build --release --locked -p apate-cli
+
+# 产物路径
+# Windows: target\release\apate.exe
+# Linux/macOS: target/release/apate
+```
+
+把二进制放到 `$PATH` 里的某个目录后即可直接调用 `apate`。验证安装：
+
+```powershell
+apate --version
 apate masks --json
 ```
 
-## 伪装文件
+## 3. 基本流程
+
+任何「修改文件」的操作都建议遵循三步：
+
+1. `inspect`：先判断文件是不是由 Apate 伪装过的（通过默认校验后能直接还原）；
+2. `--dry-run --json`：批量处理前先预检，确认输出路径、命名、mask 都没问题；
+3. 去掉 `--dry-run` 真正执行。
+
+跳过这三步而直接批量写入，是最常见的踩坑来源。
+
+## 4. 三种伪装模式
+
+### 4.1 一键伪装（推荐先用这个）
+
+使用内置的完整 mp4 面具文件作为文件头。适用范围最广，对绝大多数「只能传视频」
+的限制都能生效。
 
 ```powershell
-# 伪装为 JPG
-apate disguise --input .\secret.zip --kind jpg --json
-
-# 一键伪装为 MP4
 apate disguise --input .\secret.zip --one-key --json
-
-# 使用自定义 mask 文件
-apate disguise --input .\secret.zip --mask-file .\mask.bin --json
 ```
 
-默认会追加扩展名，例如 `secret.zip` -> `secret.zip.jpg`。只想改内容、不想改名时加 `--no-rename`。
+- 默认把 `secret.zip` 重命名为 `secret.mp4`；
+- 文件头被替换成内置 mp4 完整结构。
 
-## 还原文件
+### 4.2 短面具伪装
+
+只把文件头换成另一种格式的「最小特征头」（4–128 字节）。优势是文件长度变化
+最小；适用场景略窄，但对 EXE / JPG / MOV 这种「按头识别」的检查已经足够。
 
 ```powershell
-apate reveal --input .\secret.zip.jpg --json
+apate disguise --input .\secret.zip --kind exe --json
+apate disguise --input .\secret.zip --kind jpg --json
+apate disguise --input .\secret.zip --kind mp4 --json   # 等价于一键但只换 32 字节头
+apate disguise --input .\secret.zip --kind mov --json
 ```
 
-默认会移除最后一个扩展名，例如 `secret.zip.jpg` -> `secret.zip`。
+- `--kind mp4` 和 `--one-key` 的区别：前者只写 32 字节 mp4 头，后者写完整 mp4 模板。
+  简单限制场景两者都能过；遇到严格 mp4 解析时优先用 `--one-key`。
 
-如果目标文件名已经存在，命令会返回 `output_exists`，不会覆盖已有文件。
+### 4.3 自定义 mask
 
-## 批量处理
-
-目录输入必须加 `--recursive`。
+用任意二进制文件作为面具（取 `--mask-file` 的全部字节）：
 
 ```powershell
-apate disguise --input .\files --kind mp4 --recursive --dry-run --json
+apate disguise --input .\secret.zip --mask-file .\my_mask.bin --json
+```
+
+默认会按 mask 文件的扩展名替换原文件最后一个扩展名，例如 `secret.zip` 变成
+`secret.bin`。
+
+约束：
+
+- mask 不能为空；
+- mask 长度不能超过约 306 MB（`MAXIMUM_MASK_LENGTH = 2_147_483_647 / 7`）。
+- 不论是否带 `--dry-run`，以上校验都会被强制执行。
+
+## 5. 文件名变化规则
+
+| 命令 | 默认行为 |
+| --- | --- |
+| `disguise --kind jpg` | `a.zip` → `a.jpg` |
+| `disguise --one-key` | `a.zip` → `a.mp4` |
+| `disguise --mask-file my.bin` | `a.zip` → `a.bin` |
+| `disguise ... --no-rename` | 文件名不变 |
+| `reveal` | `a.jpg` → `a.zip`（优先恢复记录的原扩展名）|
+| `reveal --no-rename` | 文件名不变 |
+
+缺少原扩展名元数据的文件会退回到移除最后一个扩展名。
+
+## 6. 还原
+
+```powershell
+# 标准还原
+apate reveal --input .\secret.jpg --json
+
+# 不改名，只改内容
+apate reveal --input .\secret.jpg --no-rename --json
+```
+
+默认安全检查：
+
+- **文件头必须匹配已知面具**：与所有内置面具头（含一键伪装 mp4）逐个比对；
+- **尾部 4 字节长度字段必须合法**。
+
+任意一项不通过都会返回 `not_disguised`，不写任何字节。
+
+只有完全确认要强行尝试（比如想抢救一个尾部字节看起来对但头被改过的文件）时才
+使用 `--force`。`--force` 只跳过 mask 头校验，仍要求尾部 4 字节合法。
+
+## 7. 批量处理
+
+目录输入必须加 `--recursive`，否则命令会直接拒绝并返回
+`directory_requires_recursive`。
+
+```powershell
+# 整个目录伪装为 mp4
 apate disguise --input .\files --kind mp4 --recursive --json
+
+# 先 dry-run 看一遍计划
+apate disguise --input .\files --kind mp4 --recursive --dry-run --json
+
+# 批量还原
+apate reveal --input .\disguised --recursive --json
 ```
 
-## TUI
+dry-run 模式下：
+
+- 不会写入文件内容；
+- 会校验 mask（空 / 超限会立即报错）；
+- 会检查目标路径是否存在（已存在则返回 `output_exists`）；
+- 输出 JSON 结构与正式执行完全一致，仅 `dry_run=true`。
+
+## 8. 检查文件状态
+
+```powershell
+# 单个文件
+apate inspect .\secret.jpg --json
+```
+
+返回：
+
+```json
+{
+  "path": "secret.jpg",
+  "disguised": true,
+  "mask_length": 32,
+  "payload_length": 1024
+}
+```
+
+- `disguised = false` 时，这个文件无法被默认还原（可能根本不是 apate 伪装文件，
+  或者用了自定义 mask）；
+- `disguised = true` 时，可以放心调用 `reveal`。
+
+## 9. TUI 交互模式
+
+适合临时手动操作，不适合脚本：
 
 ```powershell
 apate tui
 ```
 
-TUI 是标准输入输出菜单，适合人工临时操作。脚本和 agent 应优先使用 JSON 子命令。
+菜单选项：
 
-## 常见错误
+```
+1) inspect
+2) masks
+3) disguise
+4) reveal
+0) exit
+```
 
-| code | 处理方式 |
-| --- | --- |
-| `not_disguised` | 文件未通过默认还原检查；确认风险后才考虑 `--force` |
-| `output_exists` | 先移动、删除或备份目标文件 |
-| `empty_mask` | 换一个非空 mask 文件 |
-| `directory_requires_recursive` | 对目录输入加 `--recursive` |
-| `invalid_arguments` | `--one-key`、`--kind`、`--mask-file` 只能选一个 |
+选 1–4 之后会提示输入路径与参数，操作完会回到菜单，选择 `0` 才退出。脚本和 agent
+**不要使用 TUI**，统一用 `--json` 子命令。
 
-## 数据安全
+## 10. 错误处理速查
 
-Apate 会就地改写文件。处理重要文件前请先备份，批量处理前先执行 dry-run。
+| code | 含义 | 处理方式 |
+| --- | --- | --- |
+| `ok` | 成功 | — |
+| `dry_run` | 仅预检记录 | 确认结果后去掉 `--dry-run` 重跑 |
+| `io_error` | 文件系统错误 | 检查权限、磁盘空间、文件占用 |
+| `empty_mask` | mask 为空 | 换一个非空文件作为 `--mask-file` |
+| `mask_too_large` | mask 超过上限 | 截短 mask 或换内置短面具 |
+| `not_disguised` | 文件未被识别为可默认还原 | 确认风险后才考虑 `--force` |
+| `output_exists` | 目标路径已存在 | 先移动 / 备份目标文件，或加 `--no-rename` |
+| `invalid_arguments` | 参数组合无效 | `--one-key` / `--kind` / `--mask-file` 三选一 |
+| `missing_path` | 输入路径不存在 | 检查路径拼写 |
+| `directory_requires_recursive` | 目录输入未加 `--recursive` | 加 `--recursive` |
+
+## 11. 故障排查
+
+### 「`not_disguised`：文件不是有效的 Apate 伪装文件」
+
+可能原因：
+
+1. 从未用 apate 伪装过这个文件；
+2. 文件被外部工具修改过头部或尾部；
+3. 用了 `--mask-file my.bin` 自定义 mask，事后又丢失了 `my.bin`，无法还原
+   （自定义 mask 不在白名单里）；
+4. 仅尾部 4 字节碰巧是合法长度但头不是任何已知面具（这是默认检查会拒绝的情况）。
+
+可以加 `--force` 强行尝试，但结果大概率损坏。
+
+### 「`output_exists`：输出路径已存在」
+
+apate 默认拒绝覆盖已有文件以防误删。处理：
+
+1. 手工删除或重命名已存在的目标；
+2. 加 `--no-rename` 跳过 rename（但内容仍会被改写）；
+3. 确认要覆盖后再重跑。
+
+### dry-run 通过但正式执行失败
+
+dry-run 会复用 mask 校验和路径检查，所以这种情况只可能来自 IO 层面的差异：
+权限、文件被其他进程占用、磁盘空间不足等。检查环境后再重跑。
+
+### 还原后文件打不开
+
+最常见原因：
+
+1. 伪装后文件被二次修改；
+2. 用了 `--force` 对非伪装文件强行还原；
+3. 伪装文件缺少原扩展名元数据，只能退回到移除最后一个扩展名；
+4. 自定义 mask 与原 mask 不一致。
+
+恢复策略：保持原始文件未被破坏的前提下，重新 `reveal` 应能回到原始字节。
+
+## 12. 最佳实践
+
+- **始终先 inspect 再 reveal**：避免对非伪装文件写入；
+- **始终先 dry-run 再批量写入**：避免对目录误改；
+- **始终确保目标路径无冲突**：避免 `output_exists` 中断批量；
+- **敏感内容先加密再伪装**：Apate 解决格式封锁，不提供密码学保密；
+- **agent / 脚本只解析 `--json`**：人类可读输出格式可能调整；
+- **备份原始数据**：apate 就地改写，无法撤销。
+
+## 13. 数据安全
+
+Apate 会就地改写文件，无回收站机制。建议：
+
+- 处理重要文件前先做一次完整备份；
+- 批量处理前先 `--dry-run --json`；
+- 写脚本时根据 `results[*].ok` 决定是否继续；
+- 遇到 `output_exists` 时先停下来确认，再决定是否覆盖。
+
+## 14. 进阶：读 `BatchOutput`
+
+`disguise` / `reveal` 共用以下结构：
+
+```json
+{
+  "ok": true,
+  "dry_run": false,
+  "results": [
+    {
+      "action": "disguise",
+      "path": "a.zip",
+      "output_path": "a.jpg",
+      "ok": true,
+      "code": "ok",
+      "message": "处理成功"
+    }
+  ]
+}
+```
+
+字段：
+
+- `ok`（顶层）：所有 `results[*].ok` 的 AND。批量里只要有一个失败就是 `false`，
+  进程退出码也是 `1`。
+- `dry_run`：当前批次是否为预检。
+- `results[*].path`：输入路径。
+- `results[*].output_path`：重命名后的目标路径；失败 / `--no-rename` 时为 `null`。
+- `results[*].code`：见上文错误处理速查表。
+- `results[*].message`：人类可读说明。
+
+完整 JSON schema 与错误码定义见 [`cli-reference.md`](./cli-reference.md)。

@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use apate_core::{
     ApateError, MASK_LENGTH_INDICATOR_LENGTH, MaskKind, builtin_mask, collect_input_files,
-    disguise_file, inspect_file, reveal_file,
+    disguise_file, inspect_file, original_extension, reveal_file,
 };
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -48,8 +48,14 @@ fn disguise_appends_little_endian_mask_length_and_reversed_original_header() {
     let bytes = fs::read(&file).unwrap();
     assert_eq!(&bytes[..3], b"XYZ");
     assert_eq!(&bytes[6..9], b"cba");
-    assert_eq!(&bytes[9..13], &3_i32.to_le_bytes());
-    assert_eq!(bytes.len(), 6 + 3 + MASK_LENGTH_INDICATOR_LENGTH as usize);
+    assert_eq!(&bytes[9..12], b"bin");
+    assert_eq!(&bytes[12..14], &3_u16.to_le_bytes());
+    assert_eq!(&bytes[14..22], b"APATE2EX");
+    assert_eq!(&bytes[22..26], &3_i32.to_le_bytes());
+    assert_eq!(
+        bytes.len(),
+        6 + 3 + 3 + 2 + 8 + MASK_LENGTH_INDICATOR_LENGTH as usize
+    );
 }
 
 #[test]
@@ -66,6 +72,17 @@ fn reveal_restores_file_when_mask_is_shorter_than_original_file() {
 }
 
 #[test]
+fn disguise_records_original_extension_for_default_reveal_name() {
+    let dir = TestDir::new();
+    let file = dir.path().join("payload.zip");
+    fs::write(&file, b"abcdef0123456789").unwrap();
+
+    disguise_file(&file, builtin_mask(MaskKind::Jpg).bytes).unwrap();
+
+    assert_eq!(original_extension(&file).unwrap(), Some("zip".to_string()));
+}
+
+#[test]
 fn reveal_restores_file_when_mask_is_longer_than_original_file() {
     let dir = TestDir::new();
     let file = dir.path().join("tiny.bin");
@@ -76,6 +93,22 @@ fn reveal_restores_file_when_mask_is_longer_than_original_file() {
     reveal_file(&file, false).unwrap();
 
     assert_eq!(fs::read(&file).unwrap(), original);
+}
+
+#[test]
+fn original_extension_is_none_for_old_metadata_without_extension() {
+    let dir = TestDir::new();
+    let file = dir.path().join("old-format.bin");
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(builtin_mask(MaskKind::Jpg).bytes);
+    bytes.extend_from_slice(b"ef0123456789");
+    bytes.extend_from_slice(b"dcba");
+    bytes.extend_from_slice(&4_i32.to_le_bytes());
+    fs::write(&file, bytes).unwrap();
+
+    assert_eq!(original_extension(&file).unwrap(), None);
+    reveal_file(&file, false).unwrap();
+    assert_eq!(fs::read(&file).unwrap(), b"abcdef0123456789");
 }
 
 #[test]

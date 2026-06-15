@@ -10,6 +10,7 @@
 - 默认重命名目标已存在时返回 `output_exists`，不会覆盖已有文件。
 - `--dry-run` 不写文件，但会校验 mask 和输出路径。
 - 直接运行 `apate` 会进入交互菜单，适合 Windows 双击 exe 或临时人工操作。
+- 默认命名会隐藏原扩展名：`secret.zip` 伪装为 JPG 后得到 `secret.jpg`，还原时再恢复为 `secret.zip`。
 
 ## `apate inspect <PATH> [--json]`
 
@@ -66,9 +67,9 @@ apate disguise --input .\files --kind mp4 --recursive --dry-run --json
 
 默认命名：
 
-- `--kind jpg`：`a.zip` -> `a.zip.jpg`
-- `--one-key`：`a.zip` -> `a.zip.mp4`
-- `--mask-file mask.bin`：`a.zip` -> `a.zip.bin`
+- `--kind jpg`：`a.zip` -> `a.jpg`
+- `--one-key`：`a.zip` -> `a.mp4`
+- `--mask-file mask.bin`：`a.zip` -> `a.bin`
 
 ## `apate reveal [flags]`
 
@@ -86,7 +87,8 @@ apate disguise --input .\files --kind mp4 --recursive --dry-run --json
 
 默认命名：
 
-- `a.zip.jpg` -> `a.zip`
+- `a.jpg` -> `a.zip`（新格式会记录原扩展名）
+- 没有原扩展名元数据的文件会退回到移除最后一个扩展名
 
 安全说明：
 
@@ -117,7 +119,7 @@ apate disguise --input .\files --kind mp4 --recursive --dry-run --json
     {
       "action": "disguise",
       "path": "a.zip",
-      "output_path": "a.zip.jpg",
+      "output_path": "a.jpg",
       "ok": true,
       "code": "ok",
       "message": "处理成功"
