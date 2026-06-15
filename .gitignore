@@ -1,0 +1,5 @@
+.vs
+apate/bin
+apate/obj
+target
+*.user

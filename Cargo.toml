@@ -1,0 +1,11 @@
+[workspace]
+members = [
+    "crates/apate-core",
+    "crates/apate-cli",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "GPL-3.0-only"
+repository = "https://github.com/SakurajimMai/apate"

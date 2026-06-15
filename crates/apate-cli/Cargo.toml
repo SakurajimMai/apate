@@ -1,0 +1,16 @@
+[package]
+name = "apate-cli"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "apate"
+path = "src/main.rs"
+
+[dependencies]
+apate-core = { path = "../apate-core" }
+clap = { version = "4", default-features = false, features = ["derive", "std", "help", "usage", "error-context"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
