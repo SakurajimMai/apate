@@ -97,13 +97,13 @@ apate disguise --input .\files --kind mp4 --recursive --dry-run --json
 
 ## `apate` GUI
 
-Windows 普通用户可以直接双击 `apate.exe`，或在交互终端无参数运行 `apate`。GUI 提供三块拖拽区域：
+Windows 普通用户可以直接双击 `apate.exe`，或在交互终端无参数运行 `apate`。GUI 支持一次拖入多个文件，并提供三块拖拽区域：
 
-- 左侧：检查文件状态；
-- 中间：按当前菜单选择的格式伪装，默认 MP4；
-- 右侧：还原 Apate 文件。
+- 左侧：批量检查文件状态；
+- 中间：按当前菜单选择的格式批量伪装，默认 MP4；
+- 右侧：批量还原 Apate 文件。
 
-GUI 复用 CLI 的核心算法、默认命名和输出冲突检查。
+GUI 复用 CLI 的核心算法、默认命名和输出冲突检查。批量拖入时会逐个处理并汇总成功/失败数量。
 
 ## `apate tui`
 

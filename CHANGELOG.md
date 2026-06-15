@@ -8,6 +8,7 @@
 - 单程序多模式入口：`inspect`、`masks`、`disguise`、`reveal`、`tui`。
 - 面向 agent 的 `skills/apate-cli`。
 - Windows `apate.exe` 双击或无参数运行会打开拖拽 GUI，同时保留显式 `tui` 和 CLI 子命令模式。
+- GUI 支持一次拖入多个文件，批量检查、伪装或还原，并汇总成功/失败数量。
 - GitHub Actions 多平台构建与 Release 发布流程。
 - Rust-only 文档体系。
 - 默认伪装命名会替换最后一个扩展名并记录原扩展名，例如 `secret.zip` -> `secret.jpg` -> `secret.zip`。

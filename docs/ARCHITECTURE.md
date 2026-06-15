@@ -67,7 +67,7 @@ graph LR
 
 ## CLI 流程
 
-GUI 只负责窗口、菜单和拖拽入口，不保存独立文件格式逻辑。拖入中间区域时调用与 CLI 相同的 `disguise_file`、`disguise_output_path`、`ensure_output_available` 和 `rename_if_needed`；拖入右侧区域时调用与 CLI 相同的 `reveal_file`、`reveal_output_path` 和输出冲突检查。因此 GUI、TUI、CLI 的默认命名和安全行为保持一致。
+GUI 只负责窗口、菜单和拖拽入口，不保存独立文件格式逻辑。拖入中间区域时调用与 CLI 相同的 `disguise_file`、`disguise_output_path`、`ensure_output_available` 和 `rename_if_needed`；拖入右侧区域时调用与 CLI 相同的 `reveal_file`、`reveal_output_path` 和输出冲突检查。一次拖入多个文件时，GUI 枚举所有 dropped files 并逐个处理，某个文件失败不会阻断其它文件。因此 GUI、TUI、CLI 的默认命名和安全行为保持一致。
 
 ```mermaid
 sequenceDiagram

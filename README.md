@@ -37,7 +37,7 @@ target/release/apate
 
 ## 使用模式
 
-- EXE/GUI 模式：Windows 上直接双击 `apate.exe`，会打开三栏拖拽窗口；把文件拖到中间伪装，拖到右侧还原。
+- EXE/GUI 模式：Windows 上直接双击 `apate.exe`，会打开三栏拖拽窗口；可一次拖入多个文件，中间批量伪装，右侧批量还原。
 - TUI 模式：运行 `apate tui`，显式进入标准输入输出菜单，适合临时终端操作。
 - CLI 模式：运行 `apate inspect`、`apate masks`、`apate disguise`、`apate reveal` 等子命令，脚本和 agent 应优先搭配 `--json` 使用。
 
@@ -70,9 +70,11 @@ cargo run -p apate-cli -- tui
 
 Windows 上双击 release 附件里的 `apate.exe` 会打开拖拽窗口：
 
-- 中间区域：按当前菜单选择的格式伪装，默认推荐 MP4，`secret.zip` 会变成 `secret.mp4`。
-- 右侧区域：还原 Apate 文件，`secret.jpg` 会优先恢复成 `secret.zip`。
-- 左侧区域：只做检查，并提示 JPG 打不开不等于源文件损坏。
+- 中间区域：按当前菜单选择的格式批量伪装，默认推荐 MP4，`secret.zip` 会变成 `secret.mp4`。
+- 右侧区域：批量还原 Apate 文件，`secret.jpg` 会优先恢复成 `secret.zip`。
+- 左侧区域：批量检查文件状态，并提示 JPG 打不开不等于源文件损坏。
+
+一次拖入多个文件时，GUI 会逐个处理并在底部显示成功/失败数量；某个文件失败不会阻断其它文件。
 
 注意：伪装成 `.jpg` 只是让文件头和扩展名呈现 JPG 外观，不等于生成真实照片。Windows 图片查看器打不开不代表原始文件损坏；只要用 Apate 还原后内容正常，源文件就是完整的。网盘场景默认优先用 MP4。
 

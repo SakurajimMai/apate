@@ -141,7 +141,8 @@ impl Default for GuiState {
     fn default() -> Self {
         Self {
             disguise_mask: GuiMask::OneKeyMp4,
-            status: "拖入中间区域：一键伪装为 MP4；拖入右侧区域：还原文件。".to_string(),
+            status: "可一次拖入多个文件：中间区域批量伪装，右侧区域批量还原，左侧区域批量检查。"
+                .to_string(),
         }
     }
 }
@@ -165,6 +166,7 @@ impl GuiMask {
     }
 }
 
+#[derive(Clone, Copy)]
 enum DropZone {
     Hint,
     Disguise,
@@ -211,24 +213,22 @@ unsafe extern "system" fn window_proc(
         }
         WM_DROPFILES => {
             let drop = wparam as HDROP;
-            let path = unsafe { first_dropped_file(drop) };
+            let paths = unsafe { dropped_files(drop) };
             let point = unsafe { drop_point(drop) };
             unsafe { DragFinish(drop) };
 
-            if let Some(path) = path {
+            if !paths.is_empty() {
                 let zone = drop_zone(hwnd, point);
                 if let Some(state) = unsafe { state_mut(hwnd) } {
-                    let result = match zone {
-                        DropZone::Hint => inspect_for_gui(&path),
-                        DropZone::Disguise => disguise_for_gui(&path, state.disguise_mask),
-                        DropZone::Reveal => reveal_for_gui(&path),
-                    };
-                    match result {
-                        Ok(message) => state.status = message,
-                        Err(error) => {
-                            state.status = format!("失败：{error}");
-                            show_error(hwnd, "处理失败", &state.status);
+                    let summary = process_paths_for_gui(&paths, zone, state.disguise_mask);
+                    state.status = summary.message.clone();
+                    if summary.fail_count > 0 {
+                        let mut detail = summary.message.clone();
+                        if let Some(first_error) = summary.first_error {
+                            detail.push_str("\n");
+                            detail.push_str(&format!("首个错误：{first_error}"));
                         }
+                        show_error(hwnd, "批量处理结果", &detail);
                     }
                     invalidate(hwnd);
                 }
@@ -299,6 +299,48 @@ fn reveal_for_gui(path: &Path) -> Result<String, String> {
         display_path(path),
         display_path(output)
     ))
+}
+
+struct GuiBatchSummary {
+    fail_count: usize,
+    message: String,
+    first_error: Option<String>,
+}
+
+fn process_paths_for_gui(paths: &[PathBuf], zone: DropZone, mask: GuiMask) -> GuiBatchSummary {
+    let mut fail_count = 0;
+    let mut first_error = None;
+
+    for path in paths {
+        let result = match zone {
+            DropZone::Hint => inspect_for_gui(path),
+            DropZone::Disguise => disguise_for_gui(path, mask),
+            DropZone::Reveal => reveal_for_gui(path),
+        };
+        match result {
+            Ok(_) => {}
+            Err(error) => {
+                fail_count += 1;
+                if first_error.is_none() {
+                    first_error = Some(format!("{}：{error}", display_path(path)));
+                }
+            }
+        }
+    }
+
+    let action = zone.action_label();
+    let message = if paths.is_empty() {
+        "没有可处理的文件".to_string()
+    } else {
+        let ok_count = paths.len().saturating_sub(fail_count);
+        format!("批量{action}完成：成功 {ok_count} 个，失败 {fail_count} 个")
+    };
+
+    GuiBatchSummary {
+        fail_count,
+        message,
+        first_error,
+    }
 }
 
 unsafe fn paint(hwnd: HWND, state: &GuiState) {
@@ -462,6 +504,16 @@ fn drop_zone(hwnd: HWND, point: POINT) -> DropZone {
     }
 }
 
+impl DropZone {
+    fn action_label(self) -> &'static str {
+        match self {
+            Self::Hint => "检查",
+            Self::Disguise => "伪装",
+            Self::Reveal => "还原",
+        }
+    }
+}
+
 unsafe fn state_mut(hwnd: HWND) -> Option<&'static mut GuiState> {
     let state = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut GuiState };
     if state.is_null() {
@@ -471,19 +523,25 @@ unsafe fn state_mut(hwnd: HWND) -> Option<&'static mut GuiState> {
     }
 }
 
-unsafe fn first_dropped_file(drop: HDROP) -> Option<PathBuf> {
+unsafe fn dropped_files(drop: HDROP) -> Vec<PathBuf> {
     let count = unsafe { DragQueryFileW(drop, u32::MAX, ptr::null_mut(), 0) };
     if count == 0 {
-        return None;
+        return Vec::new();
     }
-    let length = unsafe { DragQueryFileW(drop, 0, ptr::null_mut(), 0) };
-    if length == 0 {
-        return None;
+
+    let mut paths = Vec::with_capacity(count as usize);
+    for index in 0..count {
+        let length = unsafe { DragQueryFileW(drop, index, ptr::null_mut(), 0) };
+        if length == 0 {
+            continue;
+        }
+        let mut buffer = vec![0_u16; length as usize + 1];
+        unsafe { DragQueryFileW(drop, index, buffer.as_mut_ptr(), buffer.len() as u32) };
+        buffer.truncate(length as usize);
+        paths.push(PathBuf::from(OsString::from_wide(&buffer)));
     }
-    let mut buffer = vec![0_u16; length as usize + 1];
-    unsafe { DragQueryFileW(drop, 0, buffer.as_mut_ptr(), buffer.len() as u32) };
-    buffer.truncate(length as usize);
-    Some(PathBuf::from(OsString::from_wide(&buffer)))
+
+    paths
 }
 
 unsafe fn drop_point(drop: HDROP) -> POINT {
@@ -550,4 +608,120 @@ fn invalidate(hwnd: HWND) {
 
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    struct TestDir {
+        path: PathBuf,
+    }
+
+    impl TestDir {
+        fn new() -> Self {
+            let nonce = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!("apate-gui-test-{nanos}-{nonce}"));
+            fs::create_dir(&path).unwrap();
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[test]
+    fn gui_batch_disguises_all_dropped_files() {
+        let dir = TestDir::new();
+        let first = dir.path().join("one.zip");
+        let second = dir.path().join("two.zip");
+        fs::write(&first, b"first payload").unwrap();
+        fs::write(&second, b"second payload").unwrap();
+
+        let summary = process_paths_for_gui(
+            &[first.clone(), second.clone()],
+            DropZone::Disguise,
+            GuiMask::Jpg,
+        );
+
+        assert_eq!(summary.fail_count, 0);
+        assert!(!first.exists());
+        assert!(!second.exists());
+        assert!(dir.path().join("one.jpg").exists());
+        assert!(dir.path().join("two.jpg").exists());
+        assert!(summary.message.contains("成功 2 个"));
+    }
+
+    #[test]
+    fn gui_batch_reveals_all_dropped_files() {
+        let dir = TestDir::new();
+        let first = dir.path().join("one.zip");
+        let second = dir.path().join("two.zip");
+        let first_original = b"first payload";
+        let second_original = b"second payload";
+        fs::write(&first, first_original).unwrap();
+        fs::write(&second, second_original).unwrap();
+        process_paths_for_gui(
+            &[first.clone(), second.clone()],
+            DropZone::Disguise,
+            GuiMask::Jpg,
+        );
+        let first_disguised = dir.path().join("one.jpg");
+        let second_disguised = dir.path().join("two.jpg");
+
+        let summary = process_paths_for_gui(
+            &[first_disguised.clone(), second_disguised.clone()],
+            DropZone::Reveal,
+            GuiMask::Jpg,
+        );
+
+        assert_eq!(summary.fail_count, 0);
+        assert!(first.exists());
+        assert!(second.exists());
+        assert!(!first_disguised.exists());
+        assert!(!second_disguised.exists());
+        assert_eq!(fs::read(&first).unwrap(), first_original);
+        assert_eq!(fs::read(&second).unwrap(), second_original);
+    }
+
+    #[test]
+    fn gui_batch_continues_after_one_file_fails() {
+        let dir = TestDir::new();
+        let ok = dir.path().join("ok.zip");
+        let conflict_source = dir.path().join("conflict.zip");
+        let conflict_target = dir.path().join("conflict.jpg");
+        fs::write(&ok, b"ok payload").unwrap();
+        fs::write(&conflict_source, b"conflict payload").unwrap();
+        fs::write(&conflict_target, b"existing").unwrap();
+
+        let summary = process_paths_for_gui(
+            &[ok.clone(), conflict_source.clone()],
+            DropZone::Disguise,
+            GuiMask::Jpg,
+        );
+
+        assert_eq!(summary.fail_count, 1);
+        assert!(!ok.exists());
+        assert!(dir.path().join("ok.jpg").exists());
+        assert!(conflict_source.exists());
+        assert_eq!(fs::read(&conflict_target).unwrap(), b"existing");
+        assert!(summary.message.contains("成功 1 个"));
+        assert!(summary.message.contains("失败 1 个"));
+    }
 }
