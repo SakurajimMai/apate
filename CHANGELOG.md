@@ -11,6 +11,8 @@
 - GitHub Actions 多平台构建与 Release 发布流程。
 - Rust-only 文档体系。
 - 默认伪装命名会替换最后一个扩展名并记录原扩展名，例如 `secret.zip` -> `secret.jpg` -> `secret.zip`。
+- 超大文件友好的伪装格式：只读写文件头、固定 128 KiB 尾部窗口和加密恢复元数据，不复制完整 payload。
+- 使用 ChaCha20 加密恢复元数据，并混淆原始头尾窗口，降低原始格式被明文识别的概率。
 
 ### Fixed
 

@@ -4,8 +4,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use apate_core::{
-    ApateError, MASK_LENGTH_INDICATOR_LENGTH, MaskKind, builtin_mask, collect_input_files,
-    disguise_file, inspect_file, original_extension, reveal_file,
+    ApateError, MaskKind, builtin_mask, collect_input_files, disguise_file, inspect_file,
+    original_extension, reveal_file,
 };
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -38,24 +38,35 @@ impl Drop for TestDir {
 }
 
 #[test]
-fn disguise_appends_little_endian_mask_length_and_reversed_original_header() {
+fn disguise_hides_restore_metadata_in_encrypted_footer() {
     let dir = TestDir::new();
-    let file = dir.path().join("payload.bin");
+    let file = dir.path().join("payload.zip");
     fs::write(&file, b"abcdef").unwrap();
 
-    disguise_file(&file, b"XYZ").unwrap();
+    disguise_file(&file, builtin_mask(MaskKind::Jpg).bytes).unwrap();
 
     let bytes = fs::read(&file).unwrap();
-    assert_eq!(&bytes[..3], b"XYZ");
-    assert_eq!(&bytes[6..9], b"cba");
-    assert_eq!(&bytes[9..12], b"bin");
-    assert_eq!(&bytes[12..14], &3_u16.to_le_bytes());
-    assert_eq!(&bytes[14..22], b"APATE2EX");
-    assert_eq!(&bytes[22..26], &3_i32.to_le_bytes());
-    assert_eq!(
-        bytes.len(),
-        6 + 3 + 3 + 2 + 8 + MASK_LENGTH_INDICATOR_LENGTH as usize
-    );
+    assert_eq!(&bytes[..4], builtin_mask(MaskKind::Jpg).bytes);
+    assert!(!bytes.windows(3).any(|window| window == b"zip"));
+    assert!(!bytes.windows(3).any(|window| window == b"cba"));
+    assert_eq!(original_extension(&file).unwrap(), Some("zip".to_string()));
+}
+
+#[test]
+fn disguise_obfuscates_common_tail_signatures_without_full_file_rewrite() {
+    let dir = TestDir::new();
+    let file = dir.path().join("archive.zip");
+    let original = b"PK\x03\x04local-file-data----------------PK\x05\x06";
+    fs::write(&file, original).unwrap();
+
+    disguise_file(&file, builtin_mask(MaskKind::Jpg).bytes).unwrap();
+
+    let bytes = fs::read(&file).unwrap();
+    assert!(!bytes.windows(4).any(|window| window == b"PK\x03\x04"));
+    assert!(!bytes.windows(4).any(|window| window == b"PK\x05\x06"));
+
+    reveal_file(&file, false).unwrap();
+    assert_eq!(fs::read(&file).unwrap(), original);
 }
 
 #[test]
@@ -96,9 +107,9 @@ fn reveal_restores_file_when_mask_is_longer_than_original_file() {
 }
 
 #[test]
-fn original_extension_is_none_for_old_metadata_without_extension() {
+fn original_extension_is_none_for_plain_metadata_without_extension() {
     let dir = TestDir::new();
-    let file = dir.path().join("old-format.bin");
+    let file = dir.path().join("plain-format.bin");
     let mut bytes = Vec::new();
     bytes.extend_from_slice(builtin_mask(MaskKind::Jpg).bytes);
     bytes.extend_from_slice(b"ef0123456789");
@@ -107,6 +118,25 @@ fn original_extension_is_none_for_old_metadata_without_extension() {
     fs::write(&file, bytes).unwrap();
 
     assert_eq!(original_extension(&file).unwrap(), None);
+    reveal_file(&file, false).unwrap();
+    assert_eq!(fs::read(&file).unwrap(), b"abcdef0123456789");
+}
+
+#[test]
+fn reveal_supports_plain_extension_metadata() {
+    let dir = TestDir::new();
+    let file = dir.path().join("plain-extension.jpg");
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(builtin_mask(MaskKind::Jpg).bytes);
+    bytes.extend_from_slice(b"ef0123456789");
+    bytes.extend_from_slice(b"dcba");
+    bytes.extend_from_slice(b"zip");
+    bytes.extend_from_slice(&3_u16.to_le_bytes());
+    bytes.extend_from_slice(b"APATE2EX");
+    bytes.extend_from_slice(&4_i32.to_le_bytes());
+    fs::write(&file, bytes).unwrap();
+
+    assert_eq!(original_extension(&file).unwrap(), Some("zip".to_string()));
     reveal_file(&file, false).unwrap();
     assert_eq!(fs::read(&file).unwrap(), b"abcdef0123456789");
 }
@@ -143,6 +173,24 @@ fn default_reveal_rejects_plain_file_with_plausible_length_trailer() {
     let error = reveal_file(&file, false).unwrap_err();
     assert!(matches!(error, ApateError::NotDisguised));
     assert_eq!(fs::read(&file).unwrap(), original);
+}
+
+#[test]
+fn inspect_rejects_plain_file_with_encrypted_footer_marker_without_error() {
+    let dir = TestDir::new();
+    let file = dir.path().join("plain-with-marker.bin");
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"not-a-known-mask");
+    bytes.extend_from_slice(&[0xAA, 0xBB, 0xCC]);
+    bytes.extend_from_slice(&1_u32.to_le_bytes());
+    bytes.extend_from_slice(&123_u64.to_le_bytes());
+    bytes.extend_from_slice(b"APATE3EN");
+    bytes.extend_from_slice(&4_i32.to_le_bytes());
+    fs::write(&file, bytes).unwrap();
+
+    let inspection = inspect_file(&file).unwrap();
+    assert!(!inspection.disguised);
+    assert_eq!(inspection.mask_length, None);
 }
 
 #[test]

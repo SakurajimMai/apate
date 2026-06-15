@@ -1,13 +1,28 @@
+use chacha20::ChaCha20;
+use chacha20::cipher::{KeyIvInit, StreamCipher};
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const MASK_LENGTH_INDICATOR_LENGTH: u64 = 4;
 pub const MAXIMUM_MASK_LENGTH: u64 = 2_147_483_647 / 7;
 
-const EXTENSION_FOOTER_MAGIC: &[u8; 8] = b"APATE2EX";
+const ENCRYPTED_FOOTER_MAGIC: &[u8; 8] = b"APATE3EN";
+const ENCRYPTED_METADATA_MAGIC: &[u8; 6] = b"APMD01";
+const PLAIN_EXTENSION_FOOTER_MAGIC: &[u8; 8] = b"APATE2EX";
+const METADATA_LENGTH_FIELD_LENGTH: u64 = 4;
+const METADATA_NONCE_FIELD_LENGTH: u64 = 8;
 const EXTENSION_LENGTH_FIELD_LENGTH: u64 = 2;
-const EXTENSION_FOOTER_MAGIC_LENGTH: u64 = EXTENSION_FOOTER_MAGIC.len() as u64;
+const ENCRYPTED_FOOTER_MAGIC_LENGTH: u64 = ENCRYPTED_FOOTER_MAGIC.len() as u64;
+const PLAIN_EXTENSION_FOOTER_MAGIC_LENGTH: u64 = PLAIN_EXTENSION_FOOTER_MAGIC.len() as u64;
+const OBFUSCATED_TAIL_WINDOW: usize = 128 * 1024;
+const METADATA_CIPHER_CONTEXT: &[u8] = b"apate-metadata-v1";
+const TAIL_CIPHER_CONTEXT: &[u8] = b"apate-tail-window-v1";
+const APATE_INTERNAL_KEY: [u8; 32] = [
+    0x41, 0x70, 0x61, 0x74, 0x65, 0x2d, 0x72, 0x75, 0x73, 0x74, 0x2d, 0x66, 0x6f, 0x72, 0x6d, 0x61,
+    0x74, 0x2d, 0x6d, 0x61, 0x73, 0x6b, 0x2d, 0x76, 0x33, 0x2d, 0x63, 0x68, 0x61, 0x63, 0x68, 0x61,
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MaskKind {
@@ -135,15 +150,33 @@ pub fn disguise_file(path: impl AsRef<Path>, mask: &[u8]) -> Result<()> {
     let original_head_length = file_length.min(mask.len() as u64) as usize;
     let mut original_head = vec![0_u8; original_head_length];
     file.read_exact(&mut original_head)?;
+    let tail_start = file_length.saturating_sub(OBFUSCATED_TAIL_WINDOW as u64);
+    let tail_length = file_length.saturating_sub(tail_start) as usize;
+    let mut original_tail = vec![0_u8; tail_length];
+    file.seek(SeekFrom::Start(tail_start))?;
+    file.read_exact(&mut original_tail)?;
+    let encrypted_metadata = build_encrypted_metadata(
+        file_length,
+        &original_head,
+        &original_tail,
+        original_extension,
+        mask.len(),
+    )?;
 
+    obfuscate_tail_window(
+        &mut file,
+        tail_start,
+        tail_length,
+        encrypted_metadata.nonce,
+        mask.len() as u64,
+    )?;
     file.seek(SeekFrom::Start(0))?;
     file.write_all(mask)?;
     file.seek(SeekFrom::End(0))?;
-    original_head.reverse();
-    file.write_all(&original_head)?;
-    file.write_all(original_extension)?;
-    file.write_all(&(original_extension.len() as u16).to_le_bytes())?;
-    file.write_all(EXTENSION_FOOTER_MAGIC)?;
+    file.write_all(&encrypted_metadata.ciphertext)?;
+    file.write_all(&(encrypted_metadata.ciphertext.len() as u32).to_le_bytes())?;
+    file.write_all(&encrypted_metadata.nonce.to_le_bytes())?;
+    file.write_all(ENCRYPTED_FOOTER_MAGIC)?;
     file.write_all(&(mask.len() as i32).to_le_bytes())?;
     file.flush()?;
 
@@ -160,39 +193,66 @@ pub fn reveal_file(path: impl AsRef<Path>, force: bool) -> Result<()> {
     let mut file = OpenOptions::new().read(true).write(true).open(path)?;
     let disguised_length = file.metadata()?.len();
     let mask_head_length = read_mask_length(&mut file, disguised_length)?;
-    let extension_footer = read_extension_footer(&mut file, disguised_length, mask_head_length)?;
-    let payload_length = disguised_length
-        .checked_sub(MASK_LENGTH_INDICATOR_LENGTH)
-        .and_then(|length| length.checked_sub(extension_footer.byte_length))
-        .and_then(|length| length.checked_sub(mask_head_length as u64))
-        .ok_or(ApateError::NotDisguised)?;
+    let restore_metadata = read_restore_metadata(&mut file, disguised_length, mask_head_length)?;
 
-    let original_head_length;
-    if mask_head_length as u64 <= payload_length {
-        file.seek(SeekFrom::Start(
-            disguised_length
-                - MASK_LENGTH_INDICATOR_LENGTH
-                - extension_footer.byte_length
-                - mask_head_length as u64,
-        ))?;
-        original_head_length = mask_head_length as usize;
-    } else {
-        file.seek(SeekFrom::Start(mask_head_length as u64))?;
-        original_head_length = payload_length as usize;
+    match restore_metadata {
+        RestoreMetadata::Encrypted {
+            original_head,
+            original_file_length,
+            original_tail,
+            ..
+        } => {
+            if original_head.len() as u64 != original_file_length.min(mask_head_length as u64) {
+                return Err(ApateError::NotDisguised);
+            }
+            if original_tail.len()
+                != original_file_length
+                    .min(OBFUSCATED_TAIL_WINDOW as u64)
+                    .try_into()
+                    .map_err(|_| ApateError::NotDisguised)?
+            {
+                return Err(ApateError::NotDisguised);
+            }
+
+            file.set_len(original_file_length)?;
+            let tail_start = original_file_length.saturating_sub(original_tail.len() as u64);
+            file.seek(SeekFrom::Start(tail_start))?;
+            file.write_all(&original_tail)?;
+            file.seek(SeekFrom::Start(0))?;
+            file.write_all(&original_head)?;
+            file.flush()?;
+        }
+        RestoreMetadata::Plain { byte_length, .. } => {
+            let payload_length =
+                plain_payload_length(disguised_length, byte_length, mask_head_length)?;
+            let original_head_length;
+            if mask_head_length as u64 <= payload_length {
+                file.seek(SeekFrom::Start(
+                    disguised_length
+                        - MASK_LENGTH_INDICATOR_LENGTH
+                        - byte_length
+                        - mask_head_length as u64,
+                ))?;
+                original_head_length = mask_head_length as usize;
+            } else {
+                file.seek(SeekFrom::Start(mask_head_length as u64))?;
+                original_head_length = payload_length as usize;
+            }
+
+            let mut original_head = vec![0_u8; original_head_length];
+            file.read_exact(&mut original_head)?;
+            file.set_len(
+                disguised_length
+                    - mask_head_length as u64
+                    - byte_length
+                    - MASK_LENGTH_INDICATOR_LENGTH,
+            )?;
+            file.seek(SeekFrom::Start(0))?;
+            original_head.reverse();
+            file.write_all(&original_head)?;
+            file.flush()?;
+        }
     }
-
-    let mut original_head = vec![0_u8; original_head_length];
-    file.read_exact(&mut original_head)?;
-    file.set_len(
-        disguised_length
-            - mask_head_length as u64
-            - extension_footer.byte_length
-            - MASK_LENGTH_INDICATOR_LENGTH,
-    )?;
-    file.seek(SeekFrom::Start(0))?;
-    original_head.reverse();
-    file.write_all(&original_head)?;
-    file.flush()?;
 
     Ok(())
 }
@@ -220,8 +280,6 @@ pub fn inspect_file(path: impl AsRef<Path>) -> Result<Inspection> {
         }
         Err(error) => return Err(error),
     };
-    let extension_footer = read_extension_footer(&mut file, file_length, mask_length)?;
-
     if !has_known_mask_header(&mut file, mask_length)? {
         return Ok(Inspection {
             disguised: false,
@@ -229,12 +287,17 @@ pub fn inspect_file(path: impl AsRef<Path>) -> Result<Inspection> {
             payload_length: None,
         });
     }
+    let restore_metadata = read_restore_metadata(&mut file, file_length, mask_length)?;
 
-    let payload_length = file_length
-        .checked_sub(MASK_LENGTH_INDICATOR_LENGTH)
-        .and_then(|length| length.checked_sub(extension_footer.byte_length))
-        .and_then(|length| length.checked_sub(mask_length as u64))
-        .ok_or(ApateError::NotDisguised)?;
+    let payload_length = match restore_metadata {
+        RestoreMetadata::Encrypted {
+            original_file_length,
+            ..
+        } => original_file_length,
+        RestoreMetadata::Plain { byte_length, .. } => {
+            plain_payload_length(file_length, byte_length, mask_length)?
+        }
+    };
     Ok(Inspection {
         disguised: true,
         mask_length: Some(mask_length),
@@ -247,8 +310,8 @@ pub fn original_extension(path: impl AsRef<Path>) -> Result<Option<String>> {
     let mut file = OpenOptions::new().read(true).open(path)?;
     let file_length = file.metadata()?.len();
     let mask_length = read_mask_length(&mut file, file_length)?;
-    let extension_footer = read_extension_footer(&mut file, file_length, mask_length)?;
-    Ok(extension_footer.original_extension)
+    let restore_metadata = read_restore_metadata(&mut file, file_length, mask_length)?;
+    Ok(restore_metadata.original_extension().map(ToOwned::to_owned))
 }
 
 pub fn collect_input_files(path: impl AsRef<Path>, recursive: bool) -> Result<Vec<PathBuf>> {
@@ -326,39 +389,434 @@ fn read_mask_length(file: &mut fs::File, file_length: u64) -> Result<u32> {
     Ok(mask_length)
 }
 
-struct ExtensionFooter {
-    original_extension: Option<String>,
-    byte_length: u64,
+struct EncryptedMetadata {
+    ciphertext: Vec<u8>,
+    nonce: u64,
 }
 
-fn read_extension_footer(
+enum RestoreMetadata {
+    Encrypted {
+        original_extension: Option<String>,
+        original_file_length: u64,
+        original_head: Vec<u8>,
+        original_tail: Vec<u8>,
+    },
+    Plain {
+        original_extension: Option<String>,
+        byte_length: u64,
+    },
+}
+
+impl RestoreMetadata {
+    fn original_extension(&self) -> Option<&str> {
+        match self {
+            Self::Encrypted {
+                original_extension, ..
+            }
+            | Self::Plain {
+                original_extension, ..
+            } => original_extension.as_deref(),
+        }
+    }
+}
+
+fn plain_payload_length(file_length: u64, metadata_length: u64, mask_length: u32) -> Result<u64> {
+    file_length
+        .checked_sub(MASK_LENGTH_INDICATOR_LENGTH)
+        .and_then(|length| length.checked_sub(metadata_length))
+        .and_then(|length| length.checked_sub(mask_length as u64))
+        .ok_or(ApateError::NotDisguised)
+}
+
+fn build_encrypted_metadata(
+    original_file_length: u64,
+    original_head: &[u8],
+    original_tail: &[u8],
+    original_extension: &[u8],
+    mask_length: usize,
+) -> Result<EncryptedMetadata> {
+    if original_head.len() as u64 != original_file_length.min(mask_length as u64) {
+        return Err(ApateError::NotDisguised);
+    }
+    if original_head.len() > u32::MAX as usize {
+        return Err(ApateError::MaskTooLarge {
+            length: original_head.len() as u64,
+            max: u32::MAX as u64,
+        });
+    }
+    if original_tail.len() as u64 != original_file_length.min(OBFUSCATED_TAIL_WINDOW as u64) {
+        return Err(ApateError::NotDisguised);
+    }
+    if original_tail.len() > u32::MAX as usize {
+        return Err(ApateError::InvalidArguments(
+            "原始尾部窗口过长，无法写入加密尾部".to_string(),
+        ));
+    }
+
+    let mut plaintext = Vec::with_capacity(
+        ENCRYPTED_METADATA_MAGIC.len()
+            + 8
+            + 4
+            + 4
+            + 2
+            + original_extension.len()
+            + original_head.len()
+            + original_tail.len(),
+    );
+    plaintext.extend_from_slice(ENCRYPTED_METADATA_MAGIC);
+    plaintext.extend_from_slice(&original_file_length.to_le_bytes());
+    plaintext.extend_from_slice(&(original_head.len() as u32).to_le_bytes());
+    plaintext.extend_from_slice(&(original_tail.len() as u32).to_le_bytes());
+    plaintext.extend_from_slice(&(original_extension.len() as u16).to_le_bytes());
+    plaintext.extend_from_slice(original_extension);
+    plaintext.extend_from_slice(original_head);
+    plaintext.extend_from_slice(original_tail);
+
+    if plaintext.len() > u32::MAX as usize {
+        return Err(ApateError::InvalidArguments(
+            "恢复元数据过长，无法写入加密尾部".to_string(),
+        ));
+    }
+
+    let nonce = metadata_nonce(
+        original_file_length,
+        mask_length as u64,
+        original_head,
+        original_tail,
+    );
+    apply_chacha20(
+        &mut plaintext,
+        METADATA_CIPHER_CONTEXT,
+        nonce,
+        mask_length as u64,
+    );
+
+    Ok(EncryptedMetadata {
+        ciphertext: plaintext,
+        nonce,
+    })
+}
+
+fn read_restore_metadata(
     file: &mut fs::File,
     file_length: u64,
     mask_length: u32,
-) -> Result<ExtensionFooter> {
+) -> Result<RestoreMetadata> {
+    if let Some(metadata) = read_encrypted_metadata(file, file_length, mask_length)? {
+        return Ok(metadata);
+    }
+
+    read_plain_extension_footer(file, file_length, mask_length)
+}
+
+fn read_encrypted_metadata(
+    file: &mut fs::File,
+    file_length: u64,
+    mask_length: u32,
+) -> Result<Option<RestoreMetadata>> {
+    let fixed_length = METADATA_LENGTH_FIELD_LENGTH
+        + METADATA_NONCE_FIELD_LENGTH
+        + ENCRYPTED_FOOTER_MAGIC_LENGTH
+        + MASK_LENGTH_INDICATOR_LENGTH;
+    if file_length < fixed_length {
+        return Ok(None);
+    }
+
+    let magic_start = file_length - MASK_LENGTH_INDICATOR_LENGTH - ENCRYPTED_FOOTER_MAGIC_LENGTH;
+    file.seek(SeekFrom::Start(magic_start))?;
+    let mut magic = [0_u8; ENCRYPTED_FOOTER_MAGIC.len()];
+    file.read_exact(&mut magic)?;
+    if &magic != ENCRYPTED_FOOTER_MAGIC {
+        return Ok(None);
+    }
+
+    let nonce_start = magic_start
+        .checked_sub(METADATA_NONCE_FIELD_LENGTH)
+        .ok_or(ApateError::NotDisguised)?;
+    file.seek(SeekFrom::Start(nonce_start))?;
+    let mut nonce_bytes = [0_u8; 8];
+    file.read_exact(&mut nonce_bytes)?;
+    let nonce = u64::from_le_bytes(nonce_bytes);
+
+    let metadata_length_start = nonce_start
+        .checked_sub(METADATA_LENGTH_FIELD_LENGTH)
+        .ok_or(ApateError::NotDisguised)?;
+    file.seek(SeekFrom::Start(metadata_length_start))?;
+    let mut metadata_length_bytes = [0_u8; 4];
+    file.read_exact(&mut metadata_length_bytes)?;
+    let metadata_length = u32::from_le_bytes(metadata_length_bytes) as u64;
+    if metadata_length == 0 {
+        return Err(ApateError::NotDisguised);
+    }
+
+    let metadata_start = metadata_length_start
+        .checked_sub(metadata_length)
+        .ok_or(ApateError::NotDisguised)?;
+    let byte_length = metadata_length
+        + METADATA_LENGTH_FIELD_LENGTH
+        + METADATA_NONCE_FIELD_LENGTH
+        + ENCRYPTED_FOOTER_MAGIC_LENGTH;
+    if file_length < MASK_LENGTH_INDICATOR_LENGTH + byte_length + mask_length as u64 {
+        return Err(ApateError::NotDisguised);
+    }
+
+    file.seek(SeekFrom::Start(metadata_start))?;
+    let mut plaintext = vec![0_u8; metadata_length as usize];
+    file.read_exact(&mut plaintext)?;
+    apply_chacha20(
+        &mut plaintext,
+        METADATA_CIPHER_CONTEXT,
+        nonce,
+        mask_length as u64,
+    );
+    let (original_file_length, original_head, original_tail, original_extension) =
+        parse_encrypted_metadata(&plaintext, mask_length)?;
+
+    Ok(Some(RestoreMetadata::Encrypted {
+        original_extension,
+        original_file_length,
+        original_head,
+        original_tail,
+    }))
+}
+
+fn parse_encrypted_metadata(
+    plaintext: &[u8],
+    mask_length: u32,
+) -> Result<(u64, Vec<u8>, Vec<u8>, Option<String>)> {
+    let minimum_length = ENCRYPTED_METADATA_MAGIC.len() + 8 + 4 + 4 + 2;
+    if plaintext.len() < minimum_length {
+        return Err(ApateError::NotDisguised);
+    }
+    if &plaintext[..ENCRYPTED_METADATA_MAGIC.len()] != ENCRYPTED_METADATA_MAGIC {
+        return Err(ApateError::NotDisguised);
+    }
+
+    let mut cursor = ENCRYPTED_METADATA_MAGIC.len();
+    let original_file_length = read_u64_le(plaintext, &mut cursor)?;
+    let original_head_length = read_u32_le(plaintext, &mut cursor)? as usize;
+    let original_tail_length = read_u32_le(plaintext, &mut cursor)? as usize;
+    let extension_length = read_u16_le(plaintext, &mut cursor)? as usize;
+
+    let extension_end = cursor
+        .checked_add(extension_length)
+        .ok_or(ApateError::NotDisguised)?;
+    if extension_end > plaintext.len() {
+        return Err(ApateError::NotDisguised);
+    }
+    let extension = &plaintext[cursor..extension_end];
+    cursor = extension_end;
+
+    let head_end = cursor
+        .checked_add(original_head_length)
+        .ok_or(ApateError::NotDisguised)?;
+    if head_end > plaintext.len() {
+        return Err(ApateError::NotDisguised);
+    }
+    let tail_end = head_end
+        .checked_add(original_tail_length)
+        .ok_or(ApateError::NotDisguised)?;
+    if tail_end != plaintext.len() {
+        return Err(ApateError::NotDisguised);
+    }
+    if original_head_length as u64 != original_file_length.min(mask_length as u64) {
+        return Err(ApateError::NotDisguised);
+    }
+    if original_tail_length as u64 != original_file_length.min(OBFUSCATED_TAIL_WINDOW as u64) {
+        return Err(ApateError::NotDisguised);
+    }
+
+    let extension = if extension.is_empty() {
+        None
+    } else {
+        let extension =
+            String::from_utf8(extension.to_vec()).map_err(|_| ApateError::NotDisguised)?;
+        if validate_extension_text(&extension).is_err() {
+            return Err(ApateError::NotDisguised);
+        }
+        Some(extension)
+    };
+
+    Ok((
+        original_file_length,
+        plaintext[cursor..head_end].to_vec(),
+        plaintext[head_end..tail_end].to_vec(),
+        extension,
+    ))
+}
+
+fn read_u16_le(bytes: &[u8], cursor: &mut usize) -> Result<u16> {
+    let end = cursor.checked_add(2).ok_or(ApateError::NotDisguised)?;
+    let value = bytes
+        .get(*cursor..end)
+        .ok_or(ApateError::NotDisguised)?
+        .try_into()
+        .map(u16::from_le_bytes)
+        .map_err(|_| ApateError::NotDisguised)?;
+    *cursor = end;
+    Ok(value)
+}
+
+fn read_u32_le(bytes: &[u8], cursor: &mut usize) -> Result<u32> {
+    let end = cursor.checked_add(4).ok_or(ApateError::NotDisguised)?;
+    let value = bytes
+        .get(*cursor..end)
+        .ok_or(ApateError::NotDisguised)?
+        .try_into()
+        .map(u32::from_le_bytes)
+        .map_err(|_| ApateError::NotDisguised)?;
+    *cursor = end;
+    Ok(value)
+}
+
+fn read_u64_le(bytes: &[u8], cursor: &mut usize) -> Result<u64> {
+    let end = cursor.checked_add(8).ok_or(ApateError::NotDisguised)?;
+    let value = bytes
+        .get(*cursor..end)
+        .ok_or(ApateError::NotDisguised)?
+        .try_into()
+        .map(u64::from_le_bytes)
+        .map_err(|_| ApateError::NotDisguised)?;
+    *cursor = end;
+    Ok(value)
+}
+
+fn obfuscate_tail_window(
+    file: &mut fs::File,
+    tail_start: u64,
+    tail_length: usize,
+    nonce: u64,
+    mask_length: u64,
+) -> Result<()> {
+    if tail_length == 0 {
+        return Ok(());
+    }
+
+    let mut tail = vec![0_u8; tail_length];
+    file.seek(SeekFrom::Start(tail_start))?;
+    file.read_exact(&mut tail)?;
+    apply_chacha20(&mut tail, TAIL_CIPHER_CONTEXT, nonce, mask_length);
+    file.seek(SeekFrom::Start(tail_start))?;
+    file.write_all(&tail)?;
+
+    Ok(())
+}
+
+fn metadata_nonce(
+    original_file_length: u64,
+    mask_length: u64,
+    original_head: &[u8],
+    original_tail: &[u8],
+) -> u64 {
+    let random_part = random_u64().unwrap_or(0);
+    let time_part = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or(0);
+    let head_part = original_head
+        .iter()
+        .fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+            hash ^ (*byte as u64).wrapping_mul(0x0000_0100_0000_01b3)
+        });
+    let tail_part = original_tail
+        .iter()
+        .rev()
+        .take(256)
+        .fold(0x9e37_79b9_7f4a_7c15_u64, |hash, byte| {
+            hash.rotate_left(5) ^ *byte as u64
+        });
+
+    random_part
+        ^ time_part
+        ^ original_file_length.rotate_left(17)
+        ^ mask_length.rotate_left(41)
+        ^ splitmix64(head_part)
+        ^ splitmix64(tail_part)
+}
+
+fn random_u64() -> Option<u64> {
+    let mut bytes = [0_u8; 8];
+    getrandom::getrandom(&mut bytes).ok()?;
+    Some(u64::from_le_bytes(bytes))
+}
+
+fn apply_chacha20(bytes: &mut [u8], context: &[u8], nonce: u64, mask_length: u64) {
+    let key = derive_chacha20_key(context, nonce, mask_length);
+    let nonce_bytes = derive_chacha20_nonce(context, nonce, mask_length);
+    let mut cipher = ChaCha20::new(&key.into(), &nonce_bytes.into());
+    cipher.apply_keystream(bytes);
+}
+
+fn derive_chacha20_key(context: &[u8], nonce: u64, mask_length: u64) -> [u8; 32] {
+    let mut state = 0x243f_6a88_85a3_08d3 ^ nonce ^ mask_length.rotate_left(13);
+    for byte in context {
+        state = splitmix64(state ^ *byte as u64);
+    }
+    for byte in APATE_INTERNAL_KEY {
+        state = splitmix64(state ^ byte as u64);
+    }
+
+    let mut key = [0_u8; 32];
+    for chunk in key.chunks_exact_mut(8) {
+        state = splitmix64(state.wrapping_add(0x9e37_79b9_7f4a_7c15));
+        chunk.copy_from_slice(&state.to_le_bytes());
+    }
+    key
+}
+
+fn derive_chacha20_nonce(context: &[u8], nonce: u64, mask_length: u64) -> [u8; 12] {
+    let mut state = 0x1319_8a2e_0370_7344 ^ nonce.rotate_left(29) ^ mask_length.rotate_left(7);
+    for byte in context.iter().rev() {
+        state = splitmix64(state ^ *byte as u64);
+    }
+    for byte in APATE_INTERNAL_KEY.iter().rev() {
+        state = splitmix64(state ^ *byte as u64);
+    }
+
+    let mut nonce_bytes = [0_u8; 12];
+    let first = splitmix64(state).to_le_bytes();
+    let second = splitmix64(state ^ 0xa409_3822_299f_31d0).to_le_bytes();
+    nonce_bytes[..8].copy_from_slice(&first);
+    nonce_bytes[8..].copy_from_slice(&second[..4]);
+    nonce_bytes
+}
+
+fn splitmix64(value: u64) -> u64 {
+    let mut z = value;
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^ (z >> 31)
+}
+
+fn read_plain_extension_footer(
+    file: &mut fs::File,
+    file_length: u64,
+    mask_length: u32,
+) -> Result<RestoreMetadata> {
     let minimum_v2_length = MASK_LENGTH_INDICATOR_LENGTH
-        + EXTENSION_FOOTER_MAGIC_LENGTH
+        + PLAIN_EXTENSION_FOOTER_MAGIC_LENGTH
         + EXTENSION_LENGTH_FIELD_LENGTH;
     if file_length < minimum_v2_length {
-        return Ok(ExtensionFooter {
+        return Ok(RestoreMetadata::Plain {
             original_extension: None,
             byte_length: 0,
         });
     }
 
-    let magic_start = file_length - MASK_LENGTH_INDICATOR_LENGTH - EXTENSION_FOOTER_MAGIC_LENGTH;
+    let magic_start =
+        file_length - MASK_LENGTH_INDICATOR_LENGTH - PLAIN_EXTENSION_FOOTER_MAGIC_LENGTH;
     file.seek(SeekFrom::Start(magic_start))?;
-    let mut magic = [0_u8; EXTENSION_FOOTER_MAGIC.len()];
+    let mut magic = [0_u8; PLAIN_EXTENSION_FOOTER_MAGIC.len()];
     file.read_exact(&mut magic)?;
-    if &magic != EXTENSION_FOOTER_MAGIC {
-        return Ok(ExtensionFooter {
+    if &magic != PLAIN_EXTENSION_FOOTER_MAGIC {
+        return Ok(RestoreMetadata::Plain {
             original_extension: None,
             byte_length: 0,
         });
     }
 
     let Some(length_start) = magic_start.checked_sub(EXTENSION_LENGTH_FIELD_LENGTH) else {
-        return Ok(ExtensionFooter {
+        return Ok(RestoreMetadata::Plain {
             original_extension: None,
             byte_length: 0,
         });
@@ -368,17 +826,17 @@ fn read_extension_footer(
     file.read_exact(&mut length_bytes)?;
     let extension_length = u16::from_le_bytes(length_bytes) as u64;
     let footer_length =
-        extension_length + EXTENSION_LENGTH_FIELD_LENGTH + EXTENSION_FOOTER_MAGIC_LENGTH;
+        extension_length + EXTENSION_LENGTH_FIELD_LENGTH + PLAIN_EXTENSION_FOOTER_MAGIC_LENGTH;
 
     if file_length < MASK_LENGTH_INDICATOR_LENGTH + footer_length + mask_length as u64 {
-        return Ok(ExtensionFooter {
+        return Ok(RestoreMetadata::Plain {
             original_extension: None,
             byte_length: 0,
         });
     }
 
     let Some(extension_start) = length_start.checked_sub(extension_length) else {
-        return Ok(ExtensionFooter {
+        return Ok(RestoreMetadata::Plain {
             original_extension: None,
             byte_length: 0,
         });
@@ -387,19 +845,19 @@ fn read_extension_footer(
     let mut extension = vec![0_u8; extension_length as usize];
     file.read_exact(&mut extension)?;
     let Ok(extension) = String::from_utf8(extension) else {
-        return Ok(ExtensionFooter {
+        return Ok(RestoreMetadata::Plain {
             original_extension: None,
             byte_length: 0,
         });
     };
     if validate_extension_text(&extension).is_err() {
-        return Ok(ExtensionFooter {
+        return Ok(RestoreMetadata::Plain {
             original_extension: None,
             byte_length: 0,
         });
     }
 
-    Ok(ExtensionFooter {
+    Ok(RestoreMetadata::Plain {
         original_extension: Some(extension),
         byte_length: footer_length,
     })

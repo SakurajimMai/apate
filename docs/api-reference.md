@@ -82,9 +82,11 @@ pub struct Inspection {
 
 1. 校验 mask。
 2. 读取原文件前 `min(file_len, mask.len())` 字节。
-3. 从文件头写入 mask。
-4. 在文件尾部追加倒序原文件头。
-5. 追加原扩展名元数据和 4 字节 little-endian 面具长度。
+3. 读取原文件最后最多 128 KiB 尾部窗口。
+4. 用 ChaCha20 混淆尾部窗口，再从文件头写入 mask。
+5. 追加 ChaCha20 加密恢复元数据和 4 字节 little-endian 面具长度。
+
+该流程不会复制完整文件内容，适合超大文件；处理时间主要取决于 mask 长度、128 KiB 尾部窗口和恢复元数据大小。
 
 ### `inspect_file(path) -> Result<Inspection>`
 
@@ -97,7 +99,7 @@ pub struct Inspection {
 
 ### `original_extension(path) -> Result<Option<String>>`
 
-读取伪装文件尾部保存的原扩展名。新格式会返回例如 `Some("zip")`，用于 CLI 默认把 `secret.jpg` 还原为 `secret.zip`。缺少扩展名元数据的文件返回 `None`，调用方可以退回到移除最后一个扩展名的命名策略。
+读取伪装文件加密恢复元数据里的原扩展名。存在扩展名时返回例如 `Some("zip")`，用于 CLI 默认把 `secret.jpg` 还原为 `secret.zip`。缺少扩展名元数据的文件返回 `None`，调用方可以退回到移除最后一个扩展名的命名策略。
 
 ### `reveal_file(path, force) -> Result<()>`
 
