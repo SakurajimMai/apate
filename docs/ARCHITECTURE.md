@@ -102,7 +102,8 @@ sequenceDiagram
 `.github/workflows/release.yml` 会：
 
 - 在 `main` push 和 `v*` tag push 时构建 Windows/Linux 产物。
-- 在 `v*` tag push 时创建 GitHub Release。
+- 在 `main` push 时更新 `latest` 预发布 Release，并把构建附件放到 Releases 页面。
+- 在 `v*` tag push 时创建正式 GitHub Release。
 - 使用 `CHANGELOG.md` 的 `Unreleased` 段作为 Release Notes。
 
 本地发布前至少运行：

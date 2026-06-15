@@ -4,7 +4,7 @@
 
 - 使用 Rust workspace 提供核心库和单一 `apate` 二进制。
 - 同一个程序同时服务终端用户、脚本和 agent。
-- GitHub Actions 构建 Windows/Linux 应用，tag 发布到 GitHub Releases。
+- GitHub Actions 构建 Windows/Linux 应用，并把产物发布到 GitHub Releases。
 
 ## 命令
 
@@ -25,7 +25,7 @@ GitHub Actions 在 `main` push 和 `v*` tag push 时构建：
 - Windows: `apate-<ref>-windows-x86_64.zip`
 - Linux: `apate-<ref>-linux-x86_64.tar.gz`
 
-`v*` tag 会额外创建 GitHub Release，Release Notes 从 `CHANGELOG.md` 的 `Unreleased` 段抽取。
+`main` push 会更新 `latest` 预发布 Release；`v*` tag 会创建正式 GitHub Release。Release Notes 从 `CHANGELOG.md` 的 `Unreleased` 段抽取。
 
 ## 安全策略
 
