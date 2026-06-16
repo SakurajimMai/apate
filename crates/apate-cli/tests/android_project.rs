@@ -34,6 +34,8 @@ fn android_project_is_restore_only_kotlin_rust_apk() {
     assert!(app_gradle.contains("ANDROID_KEY_ALIAS"));
     assert!(app_gradle.contains("ANDROID_KEY_PASSWORD"));
     assert!(manifest.contains("android:label=\"@string/app_name\""));
+    assert!(manifest.contains("android:icon=\"@android:drawable/sym_def_app_icon\""));
+    assert!(manifest.contains("<intent-filter android:label=\"@string/app_name\">"));
     assert!(manifest.contains("android.intent.action.MAIN"));
     assert!(native_bridge.contains("System.loadLibrary(\"apate_android\")"));
     assert!(native_bridge.contains("external fun inspectFd"));
