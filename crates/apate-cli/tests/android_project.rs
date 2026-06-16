@@ -8,6 +8,8 @@ fn android_project_is_restore_only_kotlin_rust_apk() {
     let app_gradle = fs::read_to_string(root.join("android/app/build.gradle.kts")).unwrap();
     let manifest =
         fs::read_to_string(root.join("android/app/src/main/AndroidManifest.xml")).unwrap();
+    let strings =
+        fs::read_to_string(root.join("android/app/src/main/res/values/strings.xml")).unwrap();
     let native_bridge = fs::read_to_string(
         root.join("android/app/src/main/java/moe/sakurajimamai/apate/NativeBridge.kt"),
     )
@@ -22,6 +24,7 @@ fn android_project_is_restore_only_kotlin_rust_apk() {
     .unwrap();
 
     assert!(settings.contains("rootProject.name = \"ApateAndroid\""));
+    assert!(strings.contains("<string name=\"app_name\">Apatex</string>"));
     assert!(app_gradle.contains("applicationId = \"moe.sakurajimamai.apate\""));
     assert!(app_gradle.contains("minSdk = 26"));
     assert!(app_gradle.contains("compose-bom:2026.05.01"));
@@ -30,6 +33,7 @@ fn android_project_is_restore_only_kotlin_rust_apk() {
     assert!(app_gradle.contains("ANDROID_KEYSTORE_PASSWORD"));
     assert!(app_gradle.contains("ANDROID_KEY_ALIAS"));
     assert!(app_gradle.contains("ANDROID_KEY_PASSWORD"));
+    assert!(manifest.contains("android:label=\"@string/app_name\""));
     assert!(manifest.contains("android.intent.action.MAIN"));
     assert!(native_bridge.contains("System.loadLibrary(\"apate_android\")"));
     assert!(native_bridge.contains("external fun inspectFd"));
@@ -37,6 +41,8 @@ fn android_project_is_restore_only_kotlin_rust_apk() {
     assert!(native_bridge.contains("external fun restoreToFd"));
     assert!(main_activity.contains("ActivityResultContracts.OpenMultipleDocuments"));
     assert!(main_activity.contains("ActivityResultContracts.CreateDocument"));
+    assert!(main_activity.contains("safeDrawingPadding"));
+    assert!(main_activity.contains("BoxWithConstraints"));
     assert!(main_activity.contains("revealInPlace"));
     assert!(main_activity.contains("fileAccess.rename"));
     assert!(file_access.contains("DocumentsContract.renameDocument"));

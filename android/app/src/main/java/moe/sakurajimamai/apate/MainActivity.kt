@@ -50,6 +50,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.safeDrawingPadding
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -204,58 +206,82 @@ fun RestoreScreen(fileAccess: FileAccess) {
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background,
     ) {
-        Column(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 20.dp, vertical = 24.dp),
+                .safeDrawingPadding()
+                .padding(horizontal = 20.dp, vertical = 20.dp),
         ) {
-            Header(status = status, busy = busy)
-            Spacer(Modifier.height(20.dp))
-            ActionBar(
-                canRestore = files.any { it.state == FileState.Ready } && !busy,
-                onPick = { openDocuments.launch(arrayOf("*/*")) },
-                onRestore = { scope.launch { revealReadyFiles() } },
-            )
-            Spacer(Modifier.height(16.dp))
-            FileList(files = files)
+            val compactLayout = maxWidth < 360.dp || maxHeight < 640.dp
+            Column(
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                Header(status = status, busy = busy, compactLayout = compactLayout)
+                Spacer(Modifier.height(if (compactLayout) 12.dp else 20.dp))
+                ActionBar(
+                    compactLayout = compactLayout,
+                    canRestore = files.any { it.state == FileState.Ready } && !busy,
+                    onPick = { openDocuments.launch(arrayOf("*/*")) },
+                    onRestore = { scope.launch { revealReadyFiles() } },
+                )
+                Spacer(Modifier.height(if (compactLayout) 12.dp else 16.dp))
+                FileList(files = files)
+            }
         }
     }
 }
 
 @Composable
-private fun Header(status: String, busy: Boolean) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(42.dp)
-                    .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(12.dp)),
-                contentAlignment = Alignment.Center,
+private fun Header(status: String, busy: Boolean, compactLayout: Boolean) {
+    Column(verticalArrangement = Arrangement.spacedBy(if (compactLayout) 6.dp else 8.dp)) {
+        if (compactLayout) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    AppMark()
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Apate 还原",
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            text = "手机端恢复伪装文件",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                    if (busy) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            strokeWidth = 3.dp,
+                        )
+                    }
+                }
+            }
+        } else {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Icon(
-                    imageVector = Icons.Outlined.Restore,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                )
-            }
-            Column {
-                Text(
-                    text = "Apate 还原",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Text(
-                    text = "手机端恢复伪装文件",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            }
-            if (busy) {
-                Spacer(Modifier.weight(1f))
-                CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 3.dp)
+                AppMark()
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Apate 还原",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = "手机端恢复伪装文件",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                if (busy) {
+                    CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 3.dp)
+                }
             }
         }
         Text(
@@ -268,23 +294,52 @@ private fun Header(status: String, busy: Boolean) {
 
 @Composable
 private fun ActionBar(
+    compactLayout: Boolean,
     canRestore: Boolean,
     onPick: () -> Unit,
     onRestore: () -> Unit,
 ) {
+    val contentPadding = PaddingValues(horizontal = 18.dp, vertical = 14.dp)
+    if (compactLayout) {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Button(
+                modifier = Modifier.fillMaxWidth(),
+                onClick = onPick,
+                contentPadding = contentPadding,
+            ) {
+                Icon(Icons.Outlined.FolderOpen, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("选择文件")
+            }
+            OutlinedButton(
+                modifier = Modifier.fillMaxWidth(),
+                enabled = canRestore,
+                onClick = onRestore,
+                contentPadding = contentPadding,
+            ) {
+                Icon(Icons.Outlined.Restore, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("还原")
+            }
+        }
+        return
+    }
+
     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Button(
+            modifier = Modifier.weight(1f),
             onClick = onPick,
-            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 14.dp),
+            contentPadding = contentPadding,
         ) {
             Icon(Icons.Outlined.FolderOpen, contentDescription = null)
             Spacer(Modifier.width(8.dp))
             Text("选择文件")
         }
         OutlinedButton(
+            modifier = Modifier.weight(1f),
             enabled = canRestore,
             onClick = onRestore,
-            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 14.dp),
+            contentPadding = contentPadding,
         ) {
             Icon(Icons.Outlined.Restore, contentDescription = null)
             Spacer(Modifier.width(8.dp))
@@ -328,6 +383,22 @@ private fun EmptyState() {
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
+    }
+}
+
+@Composable
+private fun AppMark() {
+    Box(
+        modifier = Modifier
+            .size(42.dp)
+            .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(12.dp)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.Restore,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+        )
     }
 }
 
