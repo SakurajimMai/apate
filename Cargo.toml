@@ -2,6 +2,7 @@
 members = [
     "crates/apate-core",
     "crates/apate-cli",
+    "crates/apate-android-jni",
 ]
 resolver = "2"
 

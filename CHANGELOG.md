@@ -9,12 +9,16 @@
 - 面向 agent 的 `skills/apate-cli`。
 - Windows `apate.exe` 双击或无参数运行会打开拖拽 GUI，同时保留显式 `tui` 和 CLI 子命令模式。
 - GUI 支持一次拖入多个文件，批量检查、伪装或还原，并汇总成功/失败数量。
+- Android restore-only APK：手机端可选择通过 Apate 伪装的文件并还原，原地覆盖失败时提示另存。
+- Android JNI 桥接 crate：复用 `apate-core` 处理文件描述符，不在 Kotlin 侧重新实现格式逻辑。
 - GitHub Actions 多平台构建与 Release 发布流程。
+- GitHub Actions 构建已签名 Android APK，并把 APK 附件发布到 GitHub Releases。
 - Rust-only 文档体系。
 - 默认伪装命名会替换最后一个扩展名并记录原扩展名，例如 `secret.zip` -> `secret.jpg` -> `secret.zip`。
 - 超大文件友好的伪装格式：只读写文件头、固定 128 KiB 尾部窗口和加密恢复元数据，不复制完整 payload。
 - 使用 ChaCha20 加密恢复元数据，并混淆原始头尾窗口，降低原始格式被明文识别的概率。
 - GUI 和文档说明 JPG 无法被图片查看器打开不代表源文件损坏；当前 JPG 模式是格式外观伪装，不是生成真实照片。
+- `apate-core` 增加 stream/seekable API，支持路径以外的原地还原和另存恢复。
 
 ### Fixed
 

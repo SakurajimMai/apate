@@ -1,7 +1,7 @@
 use chacha20::ChaCha20;
 use chacha20::cipher::{KeyIvInit, StreamCipher};
 use std::fs::{self, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -68,6 +68,32 @@ pub enum ApateError {
 }
 
 pub type Result<T> = std::result::Result<T, ApateError>;
+
+pub trait SeekableFile: Read + Write + Seek {
+    fn set_target_len(&mut self, len: u64) -> io::Result<()>;
+}
+
+impl SeekableFile for fs::File {
+    fn set_target_len(&mut self, len: u64) -> io::Result<()> {
+        fs::File::set_len(self, len)
+    }
+}
+
+impl SeekableFile for Cursor<Vec<u8>> {
+    fn set_target_len(&mut self, len: u64) -> io::Result<()> {
+        let len = usize::try_from(len).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "目标长度超过当前平台可寻址内存",
+            )
+        })?;
+        self.get_mut().resize(len, 0);
+        if self.position() > len as u64 {
+            self.set_position(len as u64);
+        }
+        Ok(())
+    }
+}
 
 const JPG_HEAD: &[u8] = &[0xff, 0xd8, 0xff, 0xe1];
 const MOV_HEAD: &[u8] = b"moov";
@@ -185,16 +211,57 @@ pub fn disguise_file(path: impl AsRef<Path>, mask: &[u8]) -> Result<()> {
 
 pub fn reveal_file(path: impl AsRef<Path>, force: bool) -> Result<()> {
     let path = path.as_ref();
-    let inspection = inspect_file(path)?;
-    if !force && !inspection.disguised {
-        return Err(ApateError::NotDisguised);
+    let mut file = OpenOptions::new().read(true).write(true).open(path)?;
+    reveal_seekable(&mut file, force)
+}
+
+pub fn reveal_seekable(file: &mut impl SeekableFile, force: bool) -> Result<()> {
+    let disguised_length = stream_len(file)?;
+    if !force {
+        let inspection = inspect_seekable(file, disguised_length)?;
+        if !inspection.disguised {
+            return Err(ApateError::NotDisguised);
+        }
     }
 
-    let mut file = OpenOptions::new().read(true).write(true).open(path)?;
-    let disguised_length = file.metadata()?.len();
-    let mask_head_length = read_mask_length(&mut file, disguised_length)?;
-    let restore_metadata = read_restore_metadata(&mut file, disguised_length, mask_head_length)?;
+    let mask_head_length = read_mask_length(file, disguised_length)?;
+    let restore_metadata = read_restore_metadata(file, disguised_length, mask_head_length)?;
+    restore_in_place(file, disguised_length, mask_head_length, restore_metadata)
+}
 
+pub fn restore_to_writer(
+    mut input: impl Read + Seek,
+    output: &mut impl Write,
+    force: bool,
+) -> Result<Option<String>> {
+    let disguised_length = stream_len(&mut input)?;
+    if !force {
+        let inspection = inspect_seekable(&mut input, disguised_length)?;
+        if !inspection.disguised {
+            return Err(ApateError::NotDisguised);
+        }
+    }
+
+    let mask_head_length = read_mask_length(&mut input, disguised_length)?;
+    let restore_metadata = read_restore_metadata(&mut input, disguised_length, mask_head_length)?;
+    let original_extension = restore_metadata.original_extension().map(ToOwned::to_owned);
+    write_restored_to_output(
+        &mut input,
+        output,
+        disguised_length,
+        mask_head_length,
+        &restore_metadata,
+    )?;
+    output.flush()?;
+    Ok(original_extension)
+}
+
+fn restore_in_place(
+    file: &mut impl SeekableFile,
+    disguised_length: u64,
+    mask_head_length: u32,
+    restore_metadata: RestoreMetadata,
+) -> Result<()> {
     match restore_metadata {
         RestoreMetadata::Encrypted {
             original_head,
@@ -202,19 +269,14 @@ pub fn reveal_file(path: impl AsRef<Path>, force: bool) -> Result<()> {
             original_tail,
             ..
         } => {
-            if original_head.len() as u64 != original_file_length.min(mask_head_length as u64) {
-                return Err(ApateError::NotDisguised);
-            }
-            if original_tail.len()
-                != original_file_length
-                    .min(OBFUSCATED_TAIL_WINDOW as u64)
-                    .try_into()
-                    .map_err(|_| ApateError::NotDisguised)?
-            {
-                return Err(ApateError::NotDisguised);
-            }
+            validate_encrypted_restore_parts(
+                original_file_length,
+                mask_head_length,
+                &original_head,
+                &original_tail,
+            )?;
 
-            file.set_len(original_file_length)?;
+            file.set_target_len(original_file_length)?;
             let tail_start = original_file_length.saturating_sub(original_tail.len() as u64);
             file.seek(SeekFrom::Start(tail_start))?;
             file.write_all(&original_tail)?;
@@ -223,30 +285,9 @@ pub fn reveal_file(path: impl AsRef<Path>, force: bool) -> Result<()> {
             file.flush()?;
         }
         RestoreMetadata::Plain { byte_length, .. } => {
-            let payload_length =
-                plain_payload_length(disguised_length, byte_length, mask_head_length)?;
-            let original_head_length;
-            if mask_head_length as u64 <= payload_length {
-                file.seek(SeekFrom::Start(
-                    disguised_length
-                        - MASK_LENGTH_INDICATOR_LENGTH
-                        - byte_length
-                        - mask_head_length as u64,
-                ))?;
-                original_head_length = mask_head_length as usize;
-            } else {
-                file.seek(SeekFrom::Start(mask_head_length as u64))?;
-                original_head_length = payload_length as usize;
-            }
-
-            let mut original_head = vec![0_u8; original_head_length];
-            file.read_exact(&mut original_head)?;
-            file.set_len(
-                disguised_length
-                    - mask_head_length as u64
-                    - byte_length
-                    - MASK_LENGTH_INDICATOR_LENGTH,
-            )?;
+            let (payload_length, mut original_head) =
+                plain_original_head(file, disguised_length, byte_length, mask_head_length)?;
+            file.set_target_len(payload_length)?;
             file.seek(SeekFrom::Start(0))?;
             original_head.reverse();
             file.write_all(&original_head)?;
@@ -257,10 +298,65 @@ pub fn reveal_file(path: impl AsRef<Path>, force: bool) -> Result<()> {
     Ok(())
 }
 
+fn write_restored_to_output(
+    input: &mut (impl Read + Seek),
+    output: &mut impl Write,
+    disguised_length: u64,
+    mask_head_length: u32,
+    restore_metadata: &RestoreMetadata,
+) -> Result<()> {
+    match restore_metadata {
+        RestoreMetadata::Encrypted {
+            original_head,
+            original_file_length,
+            original_tail,
+            ..
+        } => {
+            validate_encrypted_restore_parts(
+                *original_file_length,
+                mask_head_length,
+                original_head,
+                original_tail,
+            )?;
+            write_encrypted_restored_to_output(
+                input,
+                output,
+                *original_file_length,
+                original_head,
+                original_tail,
+            )?;
+        }
+        RestoreMetadata::Plain { byte_length, .. } => {
+            let (payload_length, mut original_head) =
+                plain_original_head(input, disguised_length, *byte_length, mask_head_length)?;
+            original_head.reverse();
+            output.write_all(&original_head)?;
+            if mask_head_length as u64 <= payload_length {
+                copy_range(
+                    input,
+                    output,
+                    mask_head_length as u64,
+                    payload_length - mask_head_length as u64,
+                )?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 pub fn inspect_file(path: impl AsRef<Path>) -> Result<Inspection> {
     let path = path.as_ref();
     let mut file = OpenOptions::new().read(true).open(path)?;
-    let file_length = file.metadata()?.len();
+    inspect_reader(&mut file)
+}
+
+pub fn inspect_reader(mut reader: impl Read + Seek) -> Result<Inspection> {
+    let file_length = stream_len(&mut reader)?;
+    inspect_seekable(&mut reader, file_length)
+}
+
+fn inspect_seekable(file: &mut (impl Read + Seek), file_length: u64) -> Result<Inspection> {
     if file_length < MASK_LENGTH_INDICATOR_LENGTH {
         return Ok(Inspection {
             disguised: false,
@@ -269,7 +365,7 @@ pub fn inspect_file(path: impl AsRef<Path>) -> Result<Inspection> {
         });
     }
 
-    let mask_length = match read_mask_length(&mut file, file_length) {
+    let mask_length = match read_mask_length(file, file_length) {
         Ok(mask_length) => mask_length,
         Err(ApateError::NotDisguised) => {
             return Ok(Inspection {
@@ -280,14 +376,14 @@ pub fn inspect_file(path: impl AsRef<Path>) -> Result<Inspection> {
         }
         Err(error) => return Err(error),
     };
-    if !has_known_mask_header(&mut file, mask_length)? {
+    if !has_known_mask_header(file, mask_length)? {
         return Ok(Inspection {
             disguised: false,
             mask_length: None,
             payload_length: None,
         });
     }
-    let restore_metadata = read_restore_metadata(&mut file, file_length, mask_length)?;
+    let restore_metadata = read_restore_metadata(file, file_length, mask_length)?;
 
     let payload_length = match restore_metadata {
         RestoreMetadata::Encrypted {
@@ -308,9 +404,13 @@ pub fn inspect_file(path: impl AsRef<Path>) -> Result<Inspection> {
 pub fn original_extension(path: impl AsRef<Path>) -> Result<Option<String>> {
     let path = path.as_ref();
     let mut file = OpenOptions::new().read(true).open(path)?;
-    let file_length = file.metadata()?.len();
-    let mask_length = read_mask_length(&mut file, file_length)?;
-    let restore_metadata = read_restore_metadata(&mut file, file_length, mask_length)?;
+    original_extension_reader(&mut file)
+}
+
+pub fn original_extension_reader(mut reader: impl Read + Seek) -> Result<Option<String>> {
+    let file_length = stream_len(&mut reader)?;
+    let mask_length = read_mask_length(&mut reader, file_length)?;
+    let restore_metadata = read_restore_metadata(&mut reader, file_length, mask_length)?;
     Ok(restore_metadata.original_extension().map(ToOwned::to_owned))
 }
 
@@ -345,7 +445,14 @@ pub fn validate_mask(mask: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn has_known_mask_header(file: &mut fs::File, mask_length: u32) -> Result<bool> {
+fn stream_len(file: &mut impl Seek) -> Result<u64> {
+    let position = file.stream_position()?;
+    let len = file.seek(SeekFrom::End(0))?;
+    file.seek(SeekFrom::Start(position))?;
+    Ok(len)
+}
+
+fn has_known_mask_header(file: &mut (impl Read + Seek), mask_length: u32) -> Result<bool> {
     let mask_length = mask_length as usize;
     for mask in builtin_masks()
         .iter()
@@ -367,7 +474,7 @@ fn has_known_mask_header(file: &mut fs::File, mask_length: u32) -> Result<bool> 
     Ok(false)
 }
 
-fn read_mask_length(file: &mut fs::File, file_length: u64) -> Result<u32> {
+fn read_mask_length(file: &mut (impl Read + Seek), file_length: u64) -> Result<u32> {
     if file_length < MASK_LENGTH_INDICATOR_LENGTH {
         return Err(ApateError::NotDisguised);
     }
@@ -426,6 +533,94 @@ fn plain_payload_length(file_length: u64, metadata_length: u64, mask_length: u32
         .and_then(|length| length.checked_sub(metadata_length))
         .and_then(|length| length.checked_sub(mask_length as u64))
         .ok_or(ApateError::NotDisguised)
+}
+
+fn plain_original_head(
+    file: &mut (impl Read + Seek),
+    disguised_length: u64,
+    metadata_length: u64,
+    mask_length: u32,
+) -> Result<(u64, Vec<u8>)> {
+    let payload_length = plain_payload_length(disguised_length, metadata_length, mask_length)?;
+    let original_head_length;
+    if mask_length as u64 <= payload_length {
+        file.seek(SeekFrom::Start(
+            disguised_length - MASK_LENGTH_INDICATOR_LENGTH - metadata_length - mask_length as u64,
+        ))?;
+        original_head_length = mask_length as usize;
+    } else {
+        file.seek(SeekFrom::Start(mask_length as u64))?;
+        original_head_length = payload_length as usize;
+    }
+
+    let mut original_head = vec![0_u8; original_head_length];
+    file.read_exact(&mut original_head)?;
+    Ok((payload_length, original_head))
+}
+
+fn validate_encrypted_restore_parts(
+    original_file_length: u64,
+    mask_head_length: u32,
+    original_head: &[u8],
+    original_tail: &[u8],
+) -> Result<()> {
+    if original_head.len() as u64 != original_file_length.min(mask_head_length as u64) {
+        return Err(ApateError::NotDisguised);
+    }
+    if original_tail.len()
+        != original_file_length
+            .min(OBFUSCATED_TAIL_WINDOW as u64)
+            .try_into()
+            .map_err(|_| ApateError::NotDisguised)?
+    {
+        return Err(ApateError::NotDisguised);
+    }
+    Ok(())
+}
+
+fn write_encrypted_restored_to_output(
+    input: &mut (impl Read + Seek),
+    output: &mut impl Write,
+    original_file_length: u64,
+    original_head: &[u8],
+    original_tail: &[u8],
+) -> Result<()> {
+    output.write_all(original_head)?;
+
+    let middle_start = original_head.len() as u64;
+    let tail_start = original_file_length.saturating_sub(original_tail.len() as u64);
+    if tail_start > middle_start {
+        copy_range(input, output, middle_start, tail_start - middle_start)?;
+    }
+
+    if tail_start < middle_start {
+        let overlap_start = (middle_start - tail_start) as usize;
+        output.write_all(&original_tail[overlap_start..])?;
+    } else {
+        output.write_all(original_tail)?;
+    }
+
+    Ok(())
+}
+
+fn copy_range(
+    input: &mut (impl Read + Seek),
+    output: &mut impl Write,
+    start: u64,
+    mut length: u64,
+) -> Result<()> {
+    input.seek(SeekFrom::Start(start))?;
+    let mut buffer = vec![0_u8; 64 * 1024];
+    while length > 0 {
+        let read_len = buffer.len().min(length as usize);
+        let read = input.read(&mut buffer[..read_len])?;
+        if read == 0 {
+            return Err(ApateError::NotDisguised);
+        }
+        output.write_all(&buffer[..read])?;
+        length -= read as u64;
+    }
+    Ok(())
 }
 
 fn build_encrypted_metadata(
@@ -498,7 +693,7 @@ fn build_encrypted_metadata(
 }
 
 fn read_restore_metadata(
-    file: &mut fs::File,
+    file: &mut (impl Read + Seek),
     file_length: u64,
     mask_length: u32,
 ) -> Result<RestoreMetadata> {
@@ -510,7 +705,7 @@ fn read_restore_metadata(
 }
 
 fn read_encrypted_metadata(
-    file: &mut fs::File,
+    file: &mut (impl Read + Seek),
     file_length: u64,
     mask_length: u32,
 ) -> Result<Option<RestoreMetadata>> {
@@ -789,7 +984,7 @@ fn splitmix64(value: u64) -> u64 {
 }
 
 fn read_plain_extension_footer(
-    file: &mut fs::File,
+    file: &mut (impl Read + Seek),
     file_length: u64,
     mask_length: u32,
 ) -> Result<RestoreMetadata> {

@@ -43,6 +43,16 @@ pub struct Inspection {
 }
 ```
 
+### `SeekableFile`
+
+```rust
+pub trait SeekableFile: Read + Write + Seek {
+    fn set_target_len(&mut self, len: u64) -> io::Result<()>;
+}
+```
+
+用于把还原逻辑从路径 API 抽出来。`fs::File` 和测试用 `Cursor<Vec<u8>>` 已实现该 trait；Android JNI 可以把文件描述符转换为 `File` 后复用同一套还原逻辑。
+
 ### `ApateError`
 
 | 变体 | 含义 |
@@ -97,9 +107,17 @@ pub struct Inspection {
 
 任意一项不满足时返回 `Inspection { disguised: false, ... }`。
 
+### `inspect_reader(reader) -> Result<Inspection>`
+
+对任意 `Read + Seek` 输入执行只读检查。Android 和其它非路径调用方可用它检查文件描述符、内存缓冲或其它 seekable 输入。
+
 ### `original_extension(path) -> Result<Option<String>>`
 
 读取伪装文件加密恢复元数据里的原扩展名。存在扩展名时返回例如 `Some("zip")`，用于 CLI 默认把 `secret.jpg` 还原为 `secret.zip`。缺少扩展名元数据的文件返回 `None`，调用方可以退回到移除最后一个扩展名的命名策略。
+
+### `original_extension_reader(reader) -> Result<Option<String>>`
+
+对任意 `Read + Seek` 输入读取原扩展名元数据。
 
 ### `reveal_file(path, force) -> Result<()>`
 
@@ -107,6 +125,14 @@ pub struct Inspection {
 
 - `force=false`：先执行 `inspect_file` 安全检查。
 - `force=true`：跳过已知面具头检查，但仍依赖合法尾部长度字段。
+
+### `reveal_seekable(file, force) -> Result<()>`
+
+对实现 `SeekableFile` 的读写对象执行原地还原。它与 `reveal_file` 使用同一套校验和字节恢复逻辑，只是不要求调用方传入文件路径。
+
+### `restore_to_writer(input, output, force) -> Result<Option<String>>`
+
+从 `Read + Seek` 输入中读取伪装文件，把恢复后的原始字节写入 `Write` 输出，并返回原扩展名。该函数不会修改输入文件，适合 Android 文件提供方不支持原地覆盖时的“另存为” fallback。
 
 ### `collect_input_files(path, recursive) -> Result<Vec<PathBuf>>`
 

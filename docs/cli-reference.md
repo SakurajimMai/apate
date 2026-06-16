@@ -20,7 +20,7 @@ JSON 输出：
 
 ```json
 {
-  "path": "example.zip.mp4",
+  "path": "example.mp4",
   "disguised": true,
   "mask_length": 32,
   "payload_length": 1024

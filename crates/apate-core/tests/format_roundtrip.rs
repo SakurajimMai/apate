@@ -1,11 +1,13 @@
 use std::fs;
+use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use apate_core::{
     ApateError, MaskKind, builtin_mask, collect_input_files, disguise_file, inspect_file,
-    original_extension, reveal_file,
+    inspect_reader, original_extension, original_extension_reader, restore_to_writer, reveal_file,
+    reveal_seekable,
 };
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -80,6 +82,56 @@ fn reveal_restores_file_when_mask_is_shorter_than_original_file() {
     reveal_file(&file, false).unwrap();
 
     assert_eq!(fs::read(&file).unwrap(), original);
+}
+
+#[test]
+fn reveal_seekable_restores_disguised_bytes_without_path() {
+    let dir = TestDir::new();
+    let file = dir.path().join("payload.zip");
+    let original = b"abcdef0123456789";
+    fs::write(&file, original).unwrap();
+    disguise_file(&file, builtin_mask(MaskKind::Jpg).bytes).unwrap();
+    let disguised = fs::read(&file).unwrap();
+
+    let mut cursor = Cursor::new(disguised);
+    reveal_seekable(&mut cursor, false).unwrap();
+    let restored = cursor.into_inner();
+
+    assert_eq!(restored, original);
+}
+
+#[test]
+fn restore_to_writer_copies_restored_bytes_without_mutating_input() {
+    let dir = TestDir::new();
+    let file = dir.path().join("payload.zip");
+    let original = b"abcdef0123456789";
+    fs::write(&file, original).unwrap();
+    disguise_file(&file, builtin_mask(MaskKind::Mp4).bytes).unwrap();
+    let disguised = fs::read(&file).unwrap();
+    let mut output = Vec::new();
+
+    let restored_extension =
+        restore_to_writer(Cursor::new(disguised.clone()), &mut output, false).unwrap();
+
+    assert_eq!(restored_extension, Some("zip".to_string()));
+    assert_eq!(output, original);
+    assert_eq!(disguised, fs::read(&file).unwrap());
+}
+
+#[test]
+fn reader_apis_inspect_and_read_original_extension_without_path() {
+    let dir = TestDir::new();
+    let file = dir.path().join("payload.zip");
+    fs::write(&file, b"abcdef0123456789").unwrap();
+    disguise_file(&file, builtin_mask(MaskKind::Jpg).bytes).unwrap();
+    let disguised = fs::read(&file).unwrap();
+
+    let inspection = inspect_reader(Cursor::new(disguised.clone())).unwrap();
+    let extension = original_extension_reader(Cursor::new(disguised)).unwrap();
+
+    assert!(inspection.disguised);
+    assert_eq!(inspection.payload_length, Some(16));
+    assert_eq!(extension, Some("zip".to_string()));
 }
 
 #[test]

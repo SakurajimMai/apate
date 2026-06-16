@@ -11,10 +11,14 @@ repo/
 │   │   ├── resources/mask.mp4
 │   │   ├── src/lib.rs
 │   │   └── tests/format_roundtrip.rs
+│   ├── apate-android-jni/
+│   │   └── src/lib.rs
 │   └── apate-cli/
 │       ├── src/main.rs
 │       ├── src/gui.rs
 │       └── tests/
+├── android/
+│   └── app/
 ├── docs/
 ├── skills/apate-cli/
 └── .github/workflows/release.yml
@@ -24,16 +28,23 @@ repo/
 
 - `apate-core`：负责字节级算法、面具定义、恢复元数据加密、输入文件收集和错误类型。
 - `apate-cli`：负责 `clap` 参数解析、JSON 输出、Windows 拖拽 GUI、TUI 菜单、批量处理和重命名策略；Windows 交互环境无参数运行时进入 GUI，`apate tui` 显式进入终端菜单，子命令服务脚本和 agent。
+- `apate-android-jni`：负责 Android JNI 边界，把 Kotlin 传入的文件描述符交给 `apate-core` 的流式/seek API，并返回 JSON。
+- `android/app`：Kotlin + Jetpack Compose 的 restore-only APK，负责文件选择、状态展示、原地还原和另存 fallback。
 
 ```mermaid
 graph LR
     User[用户 / Agent]
     CLI[apate-cli]
+    Android[Android APK]
+    JNI[apate-android-jni]
     Core[apate-core]
     Mask[apate-core/resources/mask.mp4]
 
     User --> CLI
     CLI --> Core
+    User --> Android
+    Android --> JNI
+    JNI --> Core
     Core --> Mask
 ```
 
@@ -106,10 +117,13 @@ sequenceDiagram
 `.github/workflows/release.yml` 会：
 
 - 在 `main` push 和 `v*` tag push 时构建 Windows/Linux 产物。
+- 通过 `cargo-ndk` 构建 Android 四种 ABI 的 Rust JNI 库，并用 Gradle 打包签名 APK。
 - 在 `main` push 时更新 `latest` 预发布 Release，并把构建附件放到 Releases 页面。
 - 在 `v*` tag push 时创建正式 GitHub Release。
 - 使用 `CHANGELOG.md` 的 `Unreleased` 段作为 Release Notes。
-- 发布压缩包只包含对应平台的可执行文件，不把 `CHANGELOG.md` 打进附件目录。
+- 发布压缩包只包含对应平台的可执行文件，Android 附件是单独 APK，不把 `CHANGELOG.md` 打进附件目录。
+
+Android 签名依赖 GitHub Secrets：`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`。
 
 本地发布前至少运行：
 
