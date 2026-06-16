@@ -10,6 +10,13 @@ fn android_project_is_restore_only_kotlin_rust_apk() {
         fs::read_to_string(root.join("android/app/src/main/AndroidManifest.xml")).unwrap();
     let strings =
         fs::read_to_string(root.join("android/app/src/main/res/values/strings.xml")).unwrap();
+    let launcher_foreground = fs::read_to_string(
+        root.join("android/app/src/main/res/drawable/ic_launcher_foreground.xml"),
+    )
+    .unwrap();
+    let adaptive_icon =
+        fs::read_to_string(root.join("android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml"))
+            .unwrap();
     let native_bridge = fs::read_to_string(
         root.join("android/app/src/main/java/moe/sakurajimamai/apate/NativeBridge.kt"),
     )
@@ -28,6 +35,7 @@ fn android_project_is_restore_only_kotlin_rust_apk() {
     assert!(strings.contains("<string name=\"app_name\">apatex</string>"));
     assert!(app_gradle.contains("applicationId = \"moe.sakurajimamai.apate\""));
     assert!(app_gradle.contains("minSdk = 26"));
+    assert!(app_gradle.contains("versionCode = 2"));
     assert!(app_gradle.contains("compose-bom:2026.05.01"));
     assert!(app_gradle.contains("sourceCompatibility = JavaVersion.VERSION_17"));
     assert!(app_gradle.contains("targetCompatibility = JavaVersion.VERSION_17"));
@@ -35,12 +43,13 @@ fn android_project_is_restore_only_kotlin_rust_apk() {
     assert!(app_gradle.contains("ANDROID_KEY_ALIAS"));
     assert!(app_gradle.contains("ANDROID_KEY_PASSWORD"));
     assert!(manifest.contains("android:label=\"@string/app_name\""));
-    assert!(manifest.contains("android:icon=\"@android:drawable/sym_def_app_icon\""));
-    assert!(manifest.contains("<activity-alias"));
-    assert!(manifest.contains("android:name=\".LauncherActivity\""));
-    assert!(manifest.contains("android:targetActivity=\".MainActivity\""));
+    assert!(manifest.contains("android:icon=\"@mipmap/ic_launcher\""));
+    assert!(manifest.contains("android:roundIcon=\"@mipmap/ic_launcher_round\""));
+    assert!(!manifest.contains("<activity-alias"));
     assert!(manifest.contains("<intent-filter>"));
     assert!(manifest.contains("android.intent.action.MAIN"));
+    assert!(launcher_foreground.contains("apatex"));
+    assert!(adaptive_icon.contains("@drawable/ic_launcher_foreground"));
     assert!(native_bridge.contains("System.loadLibrary(\"apate_android\")"));
     assert!(native_bridge.contains("external fun inspectFd"));
     assert!(native_bridge.contains("external fun revealInPlaceFd"));
