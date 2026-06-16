@@ -209,6 +209,8 @@ apate tui
 
 Release 附件里的 `apate-*-android.apk` 用于手机端还原。第一版 APK 是 restore-only：只检查和还原通过 Apate 伪装的文件，不在手机上执行伪装。
 
+APK 支持手动下载和侧载安装。Release 构建没有配置固定 release 签名时，会使用 debug 签名；这不影响单次安装使用，但后续版本可能需要先卸载已安装版本再安装新版。
+
 使用流程：
 
 1. 安装 APK。

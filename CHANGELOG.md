@@ -12,7 +12,7 @@
 - Android restore-only APK：手机端可选择通过 Apate 伪装的文件并还原，原地覆盖失败时提示另存。
 - Android JNI 桥接 crate：复用 `apate-core` 处理文件描述符，不在 Kotlin 侧重新实现格式逻辑。
 - GitHub Actions 多平台构建与 Release 发布流程。
-- GitHub Actions 构建已签名 Android APK，并把 APK 附件发布到 GitHub Releases。
+- GitHub Actions 构建 Android APK 并把 APK 附件发布到 GitHub Releases；未配置 release keystore 时使用 debug 签名，方便用户手动下载安装。
 - Rust-only 文档体系。
 - 默认伪装命名会替换最后一个扩展名并记录原扩展名，例如 `secret.zip` -> `secret.jpg` -> `secret.zip`。
 - 超大文件友好的伪装格式：只读写文件头、固定 128 KiB 尾部窗口和加密恢复元数据，不复制完整 payload。
@@ -23,6 +23,7 @@
 ### Fixed
 
 - `main` 分支构建产物会上传到 `latest` 预发布 Release，不再只停留在 Actions artifact。
+- Android APK 不再因为缺少 release 签名 secrets 被跳过。
 - Release 压缩包只包含对应平台可执行文件，不再把 `CHANGELOG.md` 打进附件目录。
 - 默认还原前校验已知面具头，避免普通文件仅因尾部 4 字节像长度字段而被误判并写坏。
 - 默认重命名前拒绝覆盖已有目标文件，避免 `disguise` / `reveal` 静默覆盖用户数据。

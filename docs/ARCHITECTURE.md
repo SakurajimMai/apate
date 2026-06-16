@@ -117,13 +117,13 @@ sequenceDiagram
 `.github/workflows/release.yml` 会：
 
 - 在 `main` push 和 `v*` tag push 时构建 Windows/Linux 产物。
-- 通过 `cargo-ndk` 构建 Android 四种 ABI 的 Rust JNI 库，并用 Gradle 打包签名 APK。
+- 通过 `cargo-ndk` 构建 Android 四种 ABI 的 Rust JNI 库，并用 Gradle 打包 APK。
 - 在 `main` push 时更新 `latest` 预发布 Release，并把构建附件放到 Releases 页面。
 - 在 `v*` tag push 时创建正式 GitHub Release。
 - 使用 `CHANGELOG.md` 的 `Unreleased` 段作为 Release Notes。
 - 发布压缩包只包含对应平台的可执行文件，Android 附件是单独 APK，不把 `CHANGELOG.md` 打进附件目录。
 
-Android 签名依赖 GitHub Secrets：`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`。
+Android APK 每次都会上传到 Release。未配置 keystore 时使用 debug 签名，适合手动下载侧载；如需让用户跨版本覆盖安装，应配置固定 release 签名：`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`。
 
 本地发布前至少运行：
 

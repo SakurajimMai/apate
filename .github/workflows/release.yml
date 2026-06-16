@@ -62,37 +62,11 @@ jobs:
           name: ${{ matrix.archive }}
           path: ${{ matrix.archive }}
 
-  android-signing:
-    name: check android signing
-    runs-on: ubuntu-latest
-    outputs:
-      configured: ${{ steps.check.outputs.configured }}
-    steps:
-      - name: Check Android signing secrets
-        id: check
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          set -euo pipefail
-          if [ -n "$ANDROID_KEYSTORE_BASE64" ] \
-            && [ -n "$ANDROID_KEYSTORE_PASSWORD" ] \
-            && [ -n "$ANDROID_KEY_ALIAS" ] \
-            && [ -n "$ANDROID_KEY_PASSWORD" ]; then
-            echo "configured=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Android signing secrets are not configured; Android APK build will be skipped."
-          fi
-
   android:
     name: build android apk
-    needs: android-signing
-    if: needs.android-signing.outputs.configured == 'true'
     runs-on: ubuntu-latest
     env:
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
       ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
       ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
       ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
@@ -137,16 +111,19 @@ jobs:
         with:
           gradle-version: 8.14.3
 
-      - name: Decode Android release keystore
+      - name: Decode optional Android release keystore
         shell: bash
         run: |
           set -euo pipefail
-          test -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}"
-          test -n "$ANDROID_KEYSTORE_PASSWORD"
-          test -n "$ANDROID_KEY_ALIAS"
-          test -n "$ANDROID_KEY_PASSWORD"
-          mkdir -p android-signing
-          printf '%s' "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > android-signing/apate-release.jks
+          if [ -n "${ANDROID_KEYSTORE_BASE64:-}" ] \
+            && [ -n "${ANDROID_KEYSTORE_PASSWORD:-}" ] \
+            && [ -n "${ANDROID_KEY_ALIAS:-}" ] \
+            && [ -n "${ANDROID_KEY_PASSWORD:-}" ]; then
+            mkdir -p android-signing
+            printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android-signing/apate-release.jks
+          else
+            echo "::notice::Android signing secrets are not configured. Gradle will use debug signing for manual sideloading."
+          fi
 
       - name: Build Android native libraries
         shell: bash
@@ -161,7 +138,7 @@ jobs:
             -o android/app/src/main/jniLibs \
             build --manifest-path crates/apate-android-jni/Cargo.toml --release --locked
 
-      - name: Build signed Android APK
+      - name: Build Android APK
         working-directory: android
         run: gradle :app:assembleRelease
 
@@ -179,8 +156,8 @@ jobs:
 
   release:
     name: create release
-    needs: [build, android-signing, android]
-    if: always() && needs.build.result == 'success' && (needs.android.result == 'success' || needs.android.result == 'skipped')
+    needs: [build, android]
+    if: always() && needs.build.result == 'success' && needs.android.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -213,22 +190,9 @@ jobs:
           files: |
             dist/**/*.zip
             dist/**/*.tar.gz
+            dist/**/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload tagged Android APK
-        if: startsWith(github.ref, 'refs/tags/') && needs.android.result == 'success'
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          mapfile -d '' files < <(find dist -type f -name '*.apk' -print0)
-          if [ "${#files[@]}" -eq 0 ]; then
-            echo "No Android APK artifact found"
-            exit 1
-          fi
-          gh release upload "${{ github.ref_name }}" "${files[@]}" --clobber
 
       - name: Publish latest prerelease
         if: github.ref == 'refs/heads/main'
@@ -245,19 +209,6 @@ jobs:
           files: |
             dist/**/*.zip
             dist/**/*.tar.gz
+            dist/**/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload latest Android APK
-        if: github.ref == 'refs/heads/main' && needs.android.result == 'success'
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          mapfile -d '' files < <(find dist -type f -name '*.apk' -print0)
-          if [ "${#files[@]}" -eq 0 ]; then
-            echo "No Android APK artifact found"
-            exit 1
-          fi
-          gh release upload latest "${files[@]}" --clobber
