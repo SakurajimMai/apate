@@ -25,6 +25,8 @@ fn android_project_is_restore_only_kotlin_rust_apk() {
     assert!(app_gradle.contains("applicationId = \"moe.sakurajimamai.apate\""));
     assert!(app_gradle.contains("minSdk = 26"));
     assert!(app_gradle.contains("compose-bom:2026.05.01"));
+    assert!(app_gradle.contains("sourceCompatibility = JavaVersion.VERSION_17"));
+    assert!(app_gradle.contains("targetCompatibility = JavaVersion.VERSION_17"));
     assert!(app_gradle.contains("ANDROID_KEYSTORE_PASSWORD"));
     assert!(app_gradle.contains("ANDROID_KEY_ALIAS"));
     assert!(app_gradle.contains("ANDROID_KEY_PASSWORD"));
