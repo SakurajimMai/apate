@@ -22,6 +22,7 @@ fn android_project_is_restore_only_kotlin_rust_apk() {
         root.join("android/app/src/main/java/moe/sakurajimamai/apate/FileAccess.kt"),
     )
     .unwrap();
+    let skill = fs::read_to_string(root.join("skills/apate-cli/SKILL.md")).unwrap();
 
     assert!(settings.contains("rootProject.name = \"ApateAndroid\""));
     assert!(strings.contains("<string name=\"app_name\">Apatex</string>"));
@@ -50,6 +51,8 @@ fn android_project_is_restore_only_kotlin_rust_apk() {
     assert!(file_access.contains("DocumentsContract.renameDocument"));
     assert!(!main_activity.contains("disguise_file"));
     assert!(!main_activity.contains("Disguise"));
+    assert!(skill.contains("不要把 `local`、`test`、`tests`"));
+    assert!(skill.contains("用户明确给出的目标路径"));
 }
 
 fn workspace_root() -> PathBuf {
