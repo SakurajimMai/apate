@@ -17,6 +17,7 @@ fn release_workflow_builds_on_main_push_and_tags() {
     assert!(workflow.contains(
         "sdkmanager \"platforms;android-36\" \"build-tools;36.0.0\" \"ndk;27.0.12077973\""
     ));
+    assert!(workflow.contains("CARGO_NDK_PLATFORM: 26"));
     assert!(workflow.contains("ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973"));
     assert!(workflow.contains("ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/27.0.12077973"));
     assert!(workflow.contains("aarch64-linux-android"));
@@ -27,6 +28,7 @@ fn release_workflow_builds_on_main_push_and_tags() {
     assert!(workflow.contains("-t armeabi-v7a"));
     assert!(workflow.contains("-t x86"));
     assert!(workflow.contains("-t x86_64"));
+    assert!(!workflow.contains("--android-platform 26"));
     assert!(workflow.contains("cargo ndk"));
     assert!(
         workflow.contains(

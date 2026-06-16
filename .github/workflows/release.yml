@@ -70,6 +70,7 @@ jobs:
       ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
       ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
       ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      CARGO_NDK_PLATFORM: 26
     steps:
       - uses: actions/checkout@v4
 
@@ -134,7 +135,6 @@ jobs:
             -t armeabi-v7a \
             -t x86 \
             -t x86_64 \
-            --android-platform 26 \
             -o android/app/src/main/jniLibs \
             build --manifest-path crates/apate-android-jni/Cargo.toml --release --locked
 
