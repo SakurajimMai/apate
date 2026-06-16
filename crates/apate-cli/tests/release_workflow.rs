@@ -9,6 +9,9 @@ fn release_workflow_builds_on_main_push_and_tags() {
     assert!(workflow.contains("target: x86_64-pc-windows-msvc"));
     assert!(workflow.contains("target: x86_64-unknown-linux-gnu"));
     assert!(workflow.contains("name: build android apk"));
+    assert!(workflow.contains("name: check android signing"));
+    assert!(workflow.contains("configured: ${{ steps.check.outputs.configured }}"));
+    assert!(workflow.contains("if: needs.android-signing.outputs.configured == 'true'"));
     assert!(workflow.contains("actions/setup-java@v4"));
     assert!(workflow.contains("android-actions/setup-android@v3"));
     assert!(workflow.contains("gradle/actions/setup-gradle@v4"));
@@ -38,6 +41,14 @@ fn release_workflow_builds_on_main_push_and_tags() {
     assert!(workflow.contains("ANDROID_KEYSTORE_PASSWORD"));
     assert!(workflow.contains("ANDROID_KEY_ALIAS"));
     assert!(workflow.contains("ANDROID_KEY_PASSWORD"));
+    assert!(workflow.contains("needs: [build, android-signing, android]"));
+    assert!(
+        workflow.contains("needs.android.result == 'success' || needs.android.result == 'skipped'")
+    );
+    assert!(workflow.contains("name: Upload tagged Android APK"));
+    assert!(workflow.contains("name: Upload latest Android APK"));
+    assert!(workflow.contains("gh release upload \"${{ github.ref_name }}\""));
+    assert!(workflow.contains("gh release upload latest"));
     assert!(workflow.contains("Copy-Item \"target\\${{ matrix.target }}\\release\\apate.exe\""));
     assert!(workflow.contains("cp target/${{ matrix.target }}/release/apate dist/apate"));
     assert!(workflow.contains("name: Publish tagged release"));
@@ -48,7 +59,6 @@ fn release_workflow_builds_on_main_push_and_tags() {
     assert!(workflow.contains("prerelease: true"));
     assert!(workflow.contains("overwrite_files: true"));
     assert!(workflow.contains("tag_name: ${{ github.ref_name }}"));
-    assert!(workflow.contains("dist/**/*.apk"));
     assert!(workflow.contains("dist/**/*.zip"));
     assert!(workflow.contains("dist/**/*.tar.gz"));
     assert!(!workflow.contains("Copy-Item \"CHANGELOG.md\""));

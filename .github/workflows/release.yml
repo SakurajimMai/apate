@@ -62,8 +62,35 @@ jobs:
           name: ${{ matrix.archive }}
           path: ${{ matrix.archive }}
 
+  android-signing:
+    name: check android signing
+    runs-on: ubuntu-latest
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - name: Check Android signing secrets
+        id: check
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ] \
+            && [ -n "$ANDROID_KEYSTORE_PASSWORD" ] \
+            && [ -n "$ANDROID_KEY_ALIAS" ] \
+            && [ -n "$ANDROID_KEY_PASSWORD" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Android signing secrets are not configured; Android APK build will be skipped."
+          fi
+
   android:
     name: build android apk
+    needs: android-signing
+    if: needs.android-signing.outputs.configured == 'true'
     runs-on: ubuntu-latest
     env:
       ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -152,7 +179,8 @@ jobs:
 
   release:
     name: create release
-    needs: [build, android]
+    needs: [build, android-signing, android]
+    if: always() && needs.build.result == 'success' && (needs.android.result == 'success' || needs.android.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -183,11 +211,24 @@ jobs:
           make_latest: true
           fail_on_unmatched_files: true
           files: |
-            dist/**/*.apk
             dist/**/*.zip
             dist/**/*.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload tagged Android APK
+        if: startsWith(github.ref, 'refs/tags/') && needs.android.result == 'success'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mapfile -d '' files < <(find dist -type f -name '*.apk' -print0)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No Android APK artifact found"
+            exit 1
+          fi
+          gh release upload "${{ github.ref_name }}" "${files[@]}" --clobber
 
       - name: Publish latest prerelease
         if: github.ref == 'refs/heads/main'
@@ -202,8 +243,21 @@ jobs:
           overwrite_files: true
           fail_on_unmatched_files: true
           files: |
-            dist/**/*.apk
             dist/**/*.zip
             dist/**/*.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload latest Android APK
+        if: github.ref == 'refs/heads/main' && needs.android.result == 'success'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mapfile -d '' files < <(find dist -type f -name '*.apk' -print0)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No Android APK artifact found"
+            exit 1
+          fi
+          gh release upload latest "${files[@]}" --clobber
