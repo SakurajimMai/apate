@@ -25,7 +25,7 @@ fn android_project_is_restore_only_kotlin_rust_apk() {
     let skill = fs::read_to_string(root.join("skills/apate-cli/SKILL.md")).unwrap();
 
     assert!(settings.contains("rootProject.name = \"ApateAndroid\""));
-    assert!(strings.contains("<string name=\"app_name\">Apatex</string>"));
+    assert!(strings.contains("<string name=\"app_name\">apatex</string>"));
     assert!(app_gradle.contains("applicationId = \"moe.sakurajimamai.apate\""));
     assert!(app_gradle.contains("minSdk = 26"));
     assert!(app_gradle.contains("compose-bom:2026.05.01"));
@@ -36,7 +36,10 @@ fn android_project_is_restore_only_kotlin_rust_apk() {
     assert!(app_gradle.contains("ANDROID_KEY_PASSWORD"));
     assert!(manifest.contains("android:label=\"@string/app_name\""));
     assert!(manifest.contains("android:icon=\"@android:drawable/sym_def_app_icon\""));
-    assert!(manifest.contains("<intent-filter android:label=\"@string/app_name\">"));
+    assert!(manifest.contains("<activity-alias"));
+    assert!(manifest.contains("android:name=\".LauncherActivity\""));
+    assert!(manifest.contains("android:targetActivity=\".MainActivity\""));
+    assert!(manifest.contains("<intent-filter>"));
     assert!(manifest.contains("android.intent.action.MAIN"));
     assert!(native_bridge.contains("System.loadLibrary(\"apate_android\")"));
     assert!(native_bridge.contains("external fun inspectFd"));
